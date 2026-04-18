@@ -1,0 +1,166 @@
+import logging
+import os
+import shutil
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
+import uvicorn
+
+from .extractors.pdf_extractor import PDFExtractor
+from .extractors.excel_extractor import ExcelExtractor
+from .extractors.text_extractor import TextExtractor
+from .extractors.image_extractor import ImageExtractor
+from .processors.field_mapper import FieldMapper
+from .output.excel_writer import write_excel
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "output"
+MODEL_PATH = BASE_DIR / "models" / "phi-3-mini.gguf"
+
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+SUPPORTED_TYPES = {
+    ".pdf":  "pdf",
+    ".xlsx": "excel",
+    ".xls":  "excel",
+    ".xlsm": "excel",
+    ".csv":  "excel",
+    ".txt":  "text",
+    ".png":  "image",
+    ".jpg":  "image",
+    ".jpeg": "image",
+    ".tiff": "image",
+    ".tif":  "image",
+    ".bmp":  "image",
+    ".webp": "image",
+}
+
+SUPPORTED_LANGUAGES = ["bg", "en", "pl", "cs", "it", "de"]
+
+app = FastAPI(title="Data Extraction Bot", version="1.0.0")
+
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+static_path = Path(__file__).parent / "static"
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+# Global state — initialized lazily to avoid heavy startup cost
+_extractors: dict = {}
+_mapper: FieldMapper | None = None
+
+
+def get_extractor(file_type: str, languages: list[str]):
+    key = (file_type, tuple(sorted(languages)))
+    if key not in _extractors:
+        if file_type == "pdf":
+            _extractors[key] = PDFExtractor(ocr_languages=languages)
+        elif file_type == "excel":
+            _extractors[key] = ExcelExtractor()
+        elif file_type == "text":
+            _extractors[key] = TextExtractor()
+        elif file_type == "image":
+            _extractors[key] = ImageExtractor(languages=languages)
+    return _extractors[key]
+
+
+def get_mapper() -> FieldMapper:
+    global _mapper
+    if _mapper is None:
+        llm = None
+        if MODEL_PATH.exists():
+            try:
+                from llama_cpp import Llama
+                llm = Llama(model_path=str(MODEL_PATH), n_ctx=4096, n_threads=4, verbose=False)
+                logger.info("LLM loaded: %s", MODEL_PATH.name)
+            except Exception as e:
+                logger.warning("LLM not available (%s) — regex-only mode", e)
+        else:
+            logger.info("No LLM model found at %s — regex-only mode", MODEL_PATH)
+        _mapper = FieldMapper(llm=llm)
+    return _mapper
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.post("/extract")
+async def extract(
+    file: UploadFile = File(...),
+    languages: str = Form(default="bg,en"),
+):
+    suffix = Path(file.filename).suffix.lower()
+    file_type = SUPPORTED_TYPES.get(suffix)
+    if not file_type:
+        raise HTTPException(400, f"Неподдържан формат: {suffix}. Поддържани: {list(SUPPORTED_TYPES.keys())}")
+
+    lang_list = [l.strip() for l in languages.split(",") if l.strip() in SUPPORTED_LANGUAGES]
+    if not lang_list:
+        lang_list = ["bg", "en"]
+
+    # Save upload
+    tmp_path = UPLOAD_DIR / file.filename
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    try:
+        extractor = get_extractor(file_type, lang_list)
+        extracted = extractor.extract(str(tmp_path))
+        mapper = get_mapper()
+        records = mapper.map(extracted)
+
+        if not records:
+            return {
+                "success": False,
+                "message": "Не бяха открити данни в документа.",
+                "records": [],
+                "output_file": None,
+            }
+
+        out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
+
+        return {
+            "success": True,
+            "message": f"Успешно извлечени {len(records)} записа.",
+            "records": [r.to_dict() for r in records],
+            "output_file": Path(out_path).name,
+            "extraction_source": extracted.get("source"),
+        }
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.get("/download/{filename}")
+async def download(filename: str):
+    file_path = OUTPUT_DIR / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "Файлът не е намерен.")
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/health")
+async def health():
+    mapper = get_mapper()
+    return {
+        "status": "ok",
+        "llm_available": mapper.llm is not None,
+        "model_path": str(MODEL_PATH),
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="127.0.0.1", port=5000, reload=False)
