@@ -266,10 +266,17 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # OSRAM-specific extractor
 # ---------------------------------------------------------------------------
 
-# Matches OSRAM supplier article numbers like AM510460055, AM4317600EC
-OSRAM_ARTICLE_RE = re.compile(r'\b([A-Z]{2}\d{7,10}[A-Z0-9]{0,4})\b')
-OSRAM_QTY_RE     = re.compile(r'\b(\d+)\s*(?:PCE|pce|бр\.?|STK)\b')
-OSRAM_WEIGHT_RE  = re.compile(r'\b(\d+[.,]\d+)\s*(?:\n\s*(\d+[.,]\d+))?\s*$', re.MULTILINE)
+# Supplier article numbers: AM510460055, AM4317600EC, AA577421804
+# Requires AM/AA/4M/ST prefix to avoid matching document IDs like BG203318362
+OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
+OSRAM_QTY_RE     = re.compile(r'\b(\d+)\s*(?:PCE|pce|STK|stk)\b')
+
+# Country-of-origin lines: "Китай 1,124/ 1,173/ 0,002" — not product names
+_ORIGIN_RE = re.compile(
+    r'^(Китай|Германия|Словакия|Тайван|Унгария|Полша|Чехия|Австрия|'
+    r'China|Germany|Slovakia|Taiwan|Hungary|Poland|Italy|Czech|Austria)',
+    re.IGNORECASE
+)
 
 
 def _is_osram_document(text: str) -> bool:
@@ -290,46 +297,59 @@ def extract_osram_products(text: str) -> list[ProductRecord]:
             continue
 
         article = m.group(1)
-        # Collect context window: current + next 6 lines
-        context = "\n".join(lines[i:i + 7])
+        context_lines = lines[i:i + 8]
+        context = "\n".join(context_lines)
 
         rec = ProductRecord(extraction_method="osram")
         rec.product_code = article
 
-        # Description — text after article on same line OR next line
-        rest = line[m.end():].strip()
-        if len(rest) > 4:
-            rec.product_name = rest[:80]
-        else:
-            for j in range(1, 4):
-                if i + j < len(lines):
-                    next_line = lines[i + j].strip()
-                    # Skip barcode lines (all digits) and short codes
-                    if next_line and not re.match(r'^\d+$', next_line) and len(next_line) > 5:
-                        if not OSRAM_ARTICLE_RE.match(next_line):
-                            rec.product_name = next_line[:80]
-                            break
-
-        # Quantity — find "X PCE" in context
+        # Quantity — "X PCE" anywhere in context
         qty_m = OSRAM_QTY_RE.search(context)
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # Weight — last two decimal numbers in context (brutto / netto)
-        weights = re.findall(r'\b(\d+[.,]\d+)\b', context)
-        # Filter out row numbers and dates — keep only plausible weights (< 1000)
-        weights = [w for w in weights if float(w.replace(",", ".")) < 1000
-                   and not re.search(r'\d{4}', w)]
+        # Only process lines that look like real product rows (have a quantity)
+        if rec.quantity is None:
+            i += 1
+            continue
+
+        # EAN — standalone 8/12/13/14-digit number on its own line
+        for ctx_line in context_lines[1:]:
+            ean_m = re.match(r'^(\d{8}|\d{12}|\d{13}|\d{14})$', ctx_line.strip())
+            if ean_m:
+                rec.ean = ean_m.group(1)
+                break
+
+        # Product name — skip origin/price lines and barcode lines
+        for j in range(1, 5):
+            if i + j >= len(lines):
+                break
+            candidate = lines[i + j].strip()
+            if not candidate or len(candidate) < 5:
+                continue
+            if re.match(r'^\d+$', candidate):          # pure digits = barcode
+                continue
+            if OSRAM_ARTICLE_RE.match(candidate):      # another article = next product
+                break
+            if _ORIGIN_RE.match(candidate):            # country+price line
+                continue
+            if re.match(r'^\d+\s*PCE', candidate, re.IGNORECASE):  # qty line
+                continue
+            # Looks like a real description
+            rec.product_name = candidate[:80]
+            break
+
+        # Weight — last decimal in context, excluding date-like and 4-digit numbers
+        weights = re.findall(r'\b(\d{1,3}[.,]\d{1,3})\b', context)
+        weights = [w for w in weights if float(w.replace(",", ".")) < 500]
         if weights:
             rec.weight_kg = weights[-1] + " kg"
 
-        if rec.filled_count() >= 1:
-            records.append(rec)
-
+        records.append(rec)
         i += 1
 
-    # Deduplicate by product_code
-    seen = set()
+    # Deduplicate by product_code, keep first occurrence
+    seen: set[str] = set()
     unique = []
     for r in records:
         if r.product_code not in seen:
