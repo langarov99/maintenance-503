@@ -36,7 +36,7 @@ class ProductRecord:
 # Regex patterns — multilingual (BG, EN, PL, CS, IT, DE)
 # ---------------------------------------------------------------------------
 
-EAN_PATTERN = re.compile(r'\b(\d{8}|\d{12}|\d{13})\b')
+EAN_PATTERN = re.compile(r'\b(\d{8}|\d{12}|\d{13}|\d{14}|\d{18}|\d{20})\b')
 
 PRICE_PATTERN = re.compile(
     r'(?:(?:цена|price|preis|prezzo|cena|prix|brutto|netto|без\s*ддс|с\s*ддс|'
@@ -88,13 +88,13 @@ PRODUCT_NAME_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 
 HEADER_ALIASES = {
-    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "nr", "no"],
-    "quantity":     ["кол", "qty", "quantity", "menge", "anzahl", "quantità", "ilość", "množství", "бр"],
-    "price":        ["цена", "price", "preis", "prezzo", "cena", "prix", "netto", "brutto"],
-    "product_name": ["наименование", "продукт", "name", "artikel", "bezeichnung", "nome", "nazwa", "název"],
-    "ean":          ["ean", "баркод", "barcode", "gtin", "upc"],
-    "weight_kg":    ["кг", "kg", "weight", "gewicht", "peso", "waga", "hmotnost", "брутo", "нето"],
-    "parts_in_set": ["бр", "pcs", "pieces", "stück", "set", "комплект", "sztuk", "ks"],
+    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence"],
+    "quantity":     ["кол", "qty", "quantity", "menge", "anzahl", "quantità", "ilość", "množství", "доставено", "delivered", "geliefert", "consegnato", "поръчано", "ordered", "бр"],
+    "price":        ["цена", "price", "preis", "prezzo", "cena", "prix", "единична цена", "unit price"],
+    "product_name": ["наименование", "описание", "продукт", "name", "bezeichnung", "nome", "nazwa", "název", "description", "omschrijving", "клиентско", "artikel"],
+    "ean":          ["ean", "баркод", "barcode", "gtin", "upc", "ean код"],
+    "weight_kg":    ["кг", "kg", "weight", "gewicht", "peso", "waga", "hmotnost", "брутo", "нето", "brutto", "netto", "gross", "net", "тегло"],
+    "parts_in_set": ["единични", "пълни", "pcs", "pieces", "stück", "set", "комплект", "sztuk", "ks", "бр"],
     "color":        ["цвят", "color", "colour", "farbe", "colore", "kolor", "barva"],
 }
 
@@ -108,41 +108,69 @@ def _match_header(cell: str) -> Optional[str]:
     return None
 
 
+def _clean_cell(value) -> str:
+    if value is None:
+        return ""
+    # Take only first non-empty line from multi-line cells
+    lines = [l.strip() for l in str(value).split("\n") if l.strip()]
+    return lines[0] if lines else ""
+
+
+def _extract_barcode_from_cell(value) -> str:
+    """Extract long barcode from second line of multi-line cell (e.g. OSRAM article cells)."""
+    if value is None:
+        return ""
+    lines = [l.strip() for l in str(value).split("\n") if l.strip()]
+    for line in lines[1:]:
+        m = re.search(r'\b(\d{8}|\d{12}|\d{13}|\d{14}|\d{18}|\d{20})\b', line)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def extract_from_table(table: list[list]) -> list[ProductRecord]:
     if not table or len(table) < 2:
         return []
 
-    # Detect header row (first row with most matches)
-    header_row = None
-    column_map = {}  # field_name -> col_index
+    # Scan up to first 8 rows for header — accumulate best mapping
+    best_mapping = {}
+    best_row = None
 
-    for row_idx, row in enumerate(table[:5]):
+    for row_idx, row in enumerate(table[:8]):
         mapping = {}
         for col_idx, cell in enumerate(row):
             if not cell or not str(cell).strip():
                 continue
-            field_name = _match_header(str(cell))
-            if field_name and field_name not in mapping:
-                mapping[field_name] = col_idx
-        if len(mapping) >= 2:
-            header_row = row_idx
-            column_map = mapping
-            break
+            # Check each line in multi-line cell
+            for line in str(cell).split("\n"):
+                field_name = _match_header(line)
+                if field_name and field_name not in mapping:
+                    mapping[field_name] = col_idx
+        if len(mapping) > len(best_mapping):
+            best_mapping = mapping
+            best_row = row_idx
 
-    if not column_map:
+    if not best_mapping or best_row is None:
         return []
 
     records = []
-    for row in table[header_row + 1:]:
+    for row in table[best_row + 1:]:
         if not any(str(c).strip() for c in row):
             continue
         rec = ProductRecord(extraction_method="table")
-        for field_name, col_idx in column_map.items():
+        for field_name, col_idx in best_mapping.items():
             if col_idx < len(row):
-                value = str(row[col_idx]).strip()
+                raw = row[col_idx]
+                value = _clean_cell(raw)
                 if value and value.lower() not in ("none", "nan", ""):
                     setattr(rec, field_name, value)
-        if rec.filled_count() >= 1:
+                # Try to pick barcode from second line of product_code cell
+                if field_name == "product_code" and not rec.ean:
+                    barcode = _extract_barcode_from_cell(raw)
+                    if barcode:
+                        rec.ean = barcode
+        # Skip rows that look like sub-headers or empty
+        if rec.filled_count() >= 1 and rec.product_code and not re.match(r'^[\d\s]+$', rec.product_code or ""):
             records.append(rec)
 
     return records
