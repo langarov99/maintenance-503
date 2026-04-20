@@ -11,7 +11,7 @@ set "ROOT=%ROOT:~0,-1%"
 :: -------------------------------------------------------
 :: Locate Python — prefer portable WinPython on USB
 :: -------------------------------------------------------
-set "PYTHON=%ROOT%\WinPython\python-3.11\python.exe"
+set "PYTHON=%ROOT%\WinPython\python-3.12.4.amd64\python.exe"
 if not exist "%PYTHON%" (
     :: Fallback to system Python
     where python > nul 2>&1
