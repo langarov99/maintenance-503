@@ -266,17 +266,22 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # OSRAM-specific extractor
 # ---------------------------------------------------------------------------
 
-# Supplier article numbers: AM510460055, AM4317600EC, AA577421804
-# Requires AM/AA/4M/ST prefix to avoid matching document IDs like BG203318362
+# OSRAM supplier article: AM460790055, AM4317600EC, AA577421804
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
-OSRAM_QTY_RE     = re.compile(r'\b(\d+)\s*(?:PCE|pce|STK|stk)\b')
 
-# Country-of-origin lines: "Китай 1,124/ 1,173/ 0,002" — not product names
-_ORIGIN_RE = re.compile(
-    r'^(Китай|Германия|Словакия|Тайван|Унгария|Полша|Чехия|Австрия|'
-    r'China|Germany|Slovakia|Taiwan|Hungary|Poland|Italy|Czech|Austria)',
-    re.IGNORECASE
+# Position line anchor: 000020, 000030 etc. (6-digit position number)
+_POS_RE = re.compile(r'^(0{3,5}\d{1,3})\b')
+
+# Weight triplet from OSRAM invoices: "1,200/ 1,232/ 0,009" (net/gross/unit)
+_WEIGHT_TRIPLET_RE = re.compile(
+    r'(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})'
 )
+
+# Unit price line: "10,77/ 1 PCE"
+_UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
+
+# Quantity with Bulgarian or EN unit
+_QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
 
 
 def _is_osram_document(text: str) -> bool:
@@ -284,79 +289,118 @@ def _is_osram_document(text: str) -> bool:
 
 
 def extract_osram_products(text: str) -> list[ProductRecord]:
-    """Extract product rows from OSRAM delivery note using article number anchoring."""
-    records = []
+    """
+    Extract product rows from OSRAM delivery note.
+
+    Invoice block structure (one block per position number):
+      000020  5  LEDPWL ACC 103 30X1  OSRAM  ...  53,85   <- pos / qty / name / price
+                 АВТОМОБИЛНА ОСВЕТИТЕЛНА ТЕХНИКА   HS_code
+      30  30     4062172294805  AM460790055  Китай  1,200/1,232/0,009
+      20  (5FS)                             Нетна цена
+                                            10,77/ 1 PCE   <- unit price
+    """
     lines = text.splitlines()
 
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        m = OSRAM_ARTICLE_RE.search(line)
-        if not m:
-            i += 1
+    # Split text into product blocks by position number lines
+    block_starts = [i for i, l in enumerate(lines) if _POS_RE.match(l.strip())]
+
+    if block_starts:
+        return _parse_osram_blocks(lines, block_starts)
+
+    # Fallback: anchor on article number
+    return _parse_osram_by_article(lines)
+
+
+def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[ProductRecord]:
+    records = []
+    for bi, start in enumerate(block_starts):
+        end = block_starts[bi + 1] if bi + 1 < len(block_starts) else len(lines)
+        block = lines[start:end]
+        block_text = "\n".join(block)
+
+        art_m = OSRAM_ARTICLE_RE.search(block_text)
+        if not art_m:
             continue
 
-        article = m.group(1)
-        context_lines = lines[i:i + 8]
-        context = "\n".join(context_lines)
-
         rec = ProductRecord(extraction_method="osram")
-        rec.product_code = article
+        rec.product_code = art_m.group(1)
 
-        # Quantity — "X PCE" anywhere in context
-        qty_m = OSRAM_QTY_RE.search(context)
+        # EAN: 13 or 14 consecutive digits (not part of larger number)
+        ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', block_text)
+        if ean_m:
+            rec.ean = ean_m.group(1)
+
+        # Quantity: first "N Брой/PCE" occurrence
+        qty_m = _QTY_RE.search(block_text)
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # Only process lines that look like real product rows (have a quantity)
-        if rec.quantity is None:
-            i += 1
-            continue
+        # Unit price: "10,77/ 1 PCE"
+        up_m = _UNIT_PRICE_RE.search(block_text)
+        if up_m:
+            rec.price = up_m.group(1).replace(",", ".") + " EUR"
 
-        # EAN — standalone 8/12/13/14-digit number on its own line
-        for ctx_line in context_lines[1:]:
-            ean_m = re.match(r'^(\d{8}|\d{12}|\d{13}|\d{14})$', ctx_line.strip())
-            if ean_m:
-                rec.ean = ean_m.group(1)
-                break
+        # Weight: 3rd value from triplet "net/gross/unit" — take unit weight
+        wt_m = _WEIGHT_TRIPLET_RE.search(block_text)
+        if wt_m:
+            rec.weight_kg = wt_m.group(3).replace(",", ".") + " kg"
 
-        # Product name — skip origin/price lines and barcode lines
-        for j in range(1, 5):
-            if i + j >= len(lines):
+        # Product name: line 1 of the block, strip leading pos/qty tokens
+        first_line_tokens = block[0].strip().split()
+        name_tokens = []
+        skip = True
+        for tok in first_line_tokens:
+            if skip and (re.match(r'^\d+$', tok) or re.match(r'^\d+[.,]\d+$', tok)):
+                continue
+            skip = False
+            if re.match(r'^\d+[.,]\d{2}$', tok):   # trailing price token
                 break
-            candidate = lines[i + j].strip()
-            if not candidate or len(candidate) < 5:
-                continue
-            if re.match(r'^\d+$', candidate):          # pure digits = barcode
-                continue
-            if OSRAM_ARTICLE_RE.match(candidate):      # another article = next product
-                break
-            if _ORIGIN_RE.match(candidate):            # country+price line
-                continue
-            if re.match(r'^\d+\s*PCE', candidate, re.IGNORECASE):  # qty line
-                continue
-            # Looks like a real description
+            name_tokens.append(tok)
+        candidate = " ".join(name_tokens).strip()
+        if len(candidate) >= 5:
             rec.product_name = candidate[:80]
-            break
-
-        # Weight — last decimal in context, excluding date-like and 4-digit numbers
-        weights = re.findall(r'\b(\d{1,3}[.,]\d{1,3})\b', context)
-        weights = [w for w in weights if float(w.replace(",", ".")) < 500]
-        if weights:
-            rec.weight_kg = weights[-1] + " kg"
 
         records.append(rec)
-        i += 1
 
-    # Deduplicate by product_code, keep first occurrence
     seen: set[str] = set()
-    unique = []
-    for r in records:
-        if r.product_code not in seen:
-            seen.add(r.product_code)
-            unique.append(r)
+    return [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
 
-    return unique
+
+def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
+    """Fallback when position numbers are not detected."""
+    records = []
+    for i, line in enumerate(lines):
+        m = OSRAM_ARTICLE_RE.search(line.strip())
+        if not m:
+            continue
+
+        ctx_lines = lines[max(0, i - 3):i + 8]
+        ctx = "\n".join(ctx_lines)
+
+        rec = ProductRecord(extraction_method="osram")
+        rec.product_code = m.group(1)
+
+        ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ctx)
+        if ean_m:
+            rec.ean = ean_m.group(1)
+
+        qty_m = _QTY_RE.search(ctx)
+        if not qty_m:
+            continue
+        rec.quantity = qty_m.group(1) + " PCE"
+
+        up_m = _UNIT_PRICE_RE.search(ctx)
+        if up_m:
+            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+
+        wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
+        if wt_m:
+            rec.weight_kg = wt_m.group(3).replace(",", ".") + " kg"
+
+        records.append(rec)
+
+    seen: set[str] = set()
+    return [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
 
 
 # ---------------------------------------------------------------------------
