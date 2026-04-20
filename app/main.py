@@ -148,7 +148,8 @@ async def extract(
                     rec.ean = info.ean or info.main_barcode
                 if not rec.price and info.unit_price:
                     rec.price = info.unit_price
-                if not rec.product_code and info.internal_code:
+                # For OSRAM records product_code comes from DB internal code (e.g. LEDIL432)
+                if info.internal_code and (not rec.product_code or rec.extraction_method == "osram"):
                     rec.product_code = info.internal_code
                 enriched += 1
             if enriched:

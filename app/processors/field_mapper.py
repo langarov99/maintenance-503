@@ -329,25 +329,30 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
 
         rec = ProductRecord(extraction_method="osram")
 
-        # ── Код на продукта: description from position line (strip pos + qty + trailing price)
-        # Line format: "000020  5  LEDPWL ACC 103 30X1  OSRAM  ...  53,85"
+        # ── product_code: filled by DB lookup (internal code like LEDIL432)
+        # Leave None here — main.py enrichment will set it from info.internal_code
+        rec.product_code = None
+        rec._osram_article = osram_article  # type: ignore[attr-defined]
+
+        # ── product_name: description from position line, Cyrillic prefix stripped
+        # Line format: "000020  5  [Кирилски категория] OSRAM_CODE specs  OSRAM  53,85"
         first_line_tokens = block[0].strip().split()
-        name_tokens = []
+        desc_tokens = []
         skip_leading = True
+        _SUPPLIERS = {"OSRAM", "BOSRAM", "2BOSRAM", "LEDVANCE", "PHILIPS"}
         for tok in first_line_tokens:
             if skip_leading and re.match(r'^\d+$', tok):
-                continue                            # skip pos number and qty digits
+                continue                                  # skip pos number and qty
             skip_leading = False
-            if re.match(r'^\d{1,6}[.,]\d{2}$', tok):  # trailing total price
+            if re.match(r'^\d{1,6}[.,]\d{2}$', tok):    # trailing total price
                 break
-            name_tokens.append(tok)
-        product_code = " ".join(name_tokens).strip()
-        # Fall back to OSRAM article if nothing useful found
-        rec.product_code = product_code if len(product_code) >= 4 else osram_article
-
-        # Store OSRAM article in product_name temporarily so DB enrichment can use it
-        # (main.py will overwrite product_name with DB description if found)
-        rec._osram_article = osram_article  # type: ignore[attr-defined]
+            if tok.upper().rstrip(".,") in _SUPPLIERS:   # supplier name
+                continue
+            if not re.search(r'[а-яА-Я]', tok):           # keep non-Cyrillic tokens
+                desc_tokens.append(tok)
+        candidate = " ".join(desc_tokens).strip()
+        if len(candidate) >= 3:
+            rec.product_name = candidate[:80]
 
         # ── EAN: 13 or 14 consecutive digits
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', block_text)
