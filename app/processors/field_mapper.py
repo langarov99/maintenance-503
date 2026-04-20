@@ -263,6 +263,83 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 
 
 # ---------------------------------------------------------------------------
+# OSRAM-specific extractor
+# ---------------------------------------------------------------------------
+
+# Matches OSRAM supplier article numbers like AM510460055, AM4317600EC
+OSRAM_ARTICLE_RE = re.compile(r'\b([A-Z]{2}\d{7,10}[A-Z0-9]{0,4})\b')
+OSRAM_QTY_RE     = re.compile(r'\b(\d+)\s*(?:PCE|pce|бр\.?|STK)\b')
+OSRAM_WEIGHT_RE  = re.compile(r'\b(\d+[.,]\d+)\s*(?:\n\s*(\d+[.,]\d+))?\s*$', re.MULTILINE)
+
+
+def _is_osram_document(text: str) -> bool:
+    return bool(re.search(r'OSRAM\s+GMBH|ams-osram|OSRAM\s+GmbH', text, re.IGNORECASE))
+
+
+def extract_osram_products(text: str) -> list[ProductRecord]:
+    """Extract product rows from OSRAM delivery note using article number anchoring."""
+    records = []
+    lines = text.splitlines()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = OSRAM_ARTICLE_RE.search(line)
+        if not m:
+            i += 1
+            continue
+
+        article = m.group(1)
+        # Collect context window: current + next 6 lines
+        context = "\n".join(lines[i:i + 7])
+
+        rec = ProductRecord(extraction_method="osram")
+        rec.product_code = article
+
+        # Description — text after article on same line OR next line
+        rest = line[m.end():].strip()
+        if len(rest) > 4:
+            rec.product_name = rest[:80]
+        else:
+            for j in range(1, 4):
+                if i + j < len(lines):
+                    next_line = lines[i + j].strip()
+                    # Skip barcode lines (all digits) and short codes
+                    if next_line and not re.match(r'^\d+$', next_line) and len(next_line) > 5:
+                        if not OSRAM_ARTICLE_RE.match(next_line):
+                            rec.product_name = next_line[:80]
+                            break
+
+        # Quantity — find "X PCE" in context
+        qty_m = OSRAM_QTY_RE.search(context)
+        if qty_m:
+            rec.quantity = qty_m.group(1) + " PCE"
+
+        # Weight — last two decimal numbers in context (brutto / netto)
+        weights = re.findall(r'\b(\d+[.,]\d+)\b', context)
+        # Filter out row numbers and dates — keep only plausible weights (< 1000)
+        weights = [w for w in weights if float(w.replace(",", ".")) < 1000
+                   and not re.search(r'\d{4}', w)]
+        if weights:
+            rec.weight_kg = weights[-1] + " kg"
+
+        if rec.filled_count() >= 1:
+            records.append(rec)
+
+        i += 1
+
+    # Deduplicate by product_code
+    seen = set()
+    unique = []
+    for r in records:
+        if r.product_code not in seen:
+            seen.add(r.product_code)
+            unique.append(r)
+
+    return unique
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -273,6 +350,13 @@ class FieldMapper:
     def map(self, extracted: dict) -> list[ProductRecord]:
         tables = extracted.get("tables", [])
         text = extracted.get("text", "")
+
+        # Step 0 — OSRAM supplier detection (before generic table/regex)
+        if text and _is_osram_document(text):
+            records = extract_osram_products(text)
+            if records:
+                logger.info("Extraction method: OSRAM-specific (%d records)", len(records))
+                return records
 
         # Step 1 — try table extraction (highest confidence)
         records = []
