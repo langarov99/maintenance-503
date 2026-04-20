@@ -136,7 +136,7 @@ async def extract(
         if db.is_loaded:
             enriched = 0
             for rec in records:
-                lookup_key = rec.product_code or rec.ean
+                lookup_key = getattr(rec, "_osram_article", None) or rec.product_code or rec.ean
                 if not lookup_key:
                     continue
                 info = db.lookup(lookup_key)

@@ -266,19 +266,18 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # OSRAM-specific extractor
 # ---------------------------------------------------------------------------
 
-# OSRAM supplier article: AM460790055, AM4317600EC, AA577421804
+# OSRAM supplier article (IC код): AM460790055, AM4317600EC, AA577421804
+# Used only for product database lookup — NOT shown as product code
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 
-# Position line anchor: 000020, 000030 etc. (6-digit position number)
+# Position line anchor: 000020, 000030 etc.
 _POS_RE = re.compile(r'^(0{3,5}\d{1,3})\b')
 
-# Weight triplet from OSRAM invoices: "1,200/ 1,232/ 0,009" (net/gross/unit)
+# Weight triplet: "1,200/ 1,232/ 0,009"
+# Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
 _WEIGHT_TRIPLET_RE = re.compile(
     r'(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})'
 )
-
-# Unit price line: "10,77/ 1 PCE"
-_UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
 
 # Quantity with Bulgarian or EN unit
 _QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
@@ -318,47 +317,55 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
         block = lines[start:end]
         block_text = "\n".join(block)
 
+        # AM article (IC код) — used only for DB lookup, not shown as product code
         art_m = OSRAM_ARTICLE_RE.search(block_text)
         if not art_m:
             continue
+        osram_article = art_m.group(1)
 
         rec = ProductRecord(extraction_method="osram")
-        rec.product_code = art_m.group(1)
 
-        # EAN: 13 or 14 consecutive digits (not part of larger number)
+        # ── Код на продукта: description from position line (strip pos + qty + trailing price)
+        # Line format: "000020  5  LEDPWL ACC 103 30X1  OSRAM  ...  53,85"
+        first_line_tokens = block[0].strip().split()
+        name_tokens = []
+        skip_leading = True
+        for tok in first_line_tokens:
+            if skip_leading and re.match(r'^\d+$', tok):
+                continue                            # skip pos number and qty digits
+            skip_leading = False
+            if re.match(r'^\d{1,6}[.,]\d{2}$', tok):  # trailing total price
+                break
+            name_tokens.append(tok)
+        product_code = " ".join(name_tokens).strip()
+        # Fall back to OSRAM article if nothing useful found
+        rec.product_code = product_code if len(product_code) >= 4 else osram_article
+
+        # Store OSRAM article in product_name temporarily so DB enrichment can use it
+        # (main.py will overwrite product_name with DB description if found)
+        rec._osram_article = osram_article  # type: ignore[attr-defined]
+
+        # ── EAN: 13 or 14 consecutive digits
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', block_text)
         if ean_m:
             rec.ean = ean_m.group(1)
 
-        # Quantity: first "N Брой/PCE" occurrence
+        # ── Количество: first "N Брой/PCE"
         qty_m = _QTY_RE.search(block_text)
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # Unit price: "10,77/ 1 PCE"
-        up_m = _UNIT_PRICE_RE.search(block_text)
-        if up_m:
-            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+        # ── Цена: total line value — rightmost decimal on position line
+        price_m = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', block[0].strip())
+        if price_m:
+            rec.price = price_m.group(1) + " EUR"
 
-        # Weight: 3rd value from triplet "net/gross/unit" — take unit weight
+        # ── Тегло: Нето / Бруто kg (1st and 2nd values of triplet — 3rd is cbm volume)
         wt_m = _WEIGHT_TRIPLET_RE.search(block_text)
         if wt_m:
-            rec.weight_kg = wt_m.group(3).replace(",", ".") + " kg"
-
-        # Product name: line 1 of the block, strip leading pos/qty tokens
-        first_line_tokens = block[0].strip().split()
-        name_tokens = []
-        skip = True
-        for tok in first_line_tokens:
-            if skip and (re.match(r'^\d+$', tok) or re.match(r'^\d+[.,]\d+$', tok)):
-                continue
-            skip = False
-            if re.match(r'^\d+[.,]\d{2}$', tok):   # trailing price token
-                break
-            name_tokens.append(tok)
-        candidate = " ".join(name_tokens).strip()
-        if len(candidate) >= 5:
-            rec.product_name = candidate[:80]
+            net   = wt_m.group(1).replace(",", ".")
+            gross = wt_m.group(2).replace(",", ".")
+            rec.weight_kg = f"{net} / {gross} kg"
 
         records.append(rec)
 
@@ -378,7 +385,9 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         ctx = "\n".join(ctx_lines)
 
         rec = ProductRecord(extraction_method="osram")
-        rec.product_code = m.group(1)
+        osram_article = m.group(1)
+        rec.product_code = osram_article      # best we can do without pos-line context
+        rec._osram_article = osram_article    # type: ignore[attr-defined]
 
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ctx)
         if ean_m:
@@ -389,13 +398,18 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             continue
         rec.quantity = qty_m.group(1) + " PCE"
 
-        up_m = _UNIT_PRICE_RE.search(ctx)
-        if up_m:
-            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+        # Total price: rightmost decimal on the pos-number line (3 lines before article)
+        for cl in ctx_lines[:4]:
+            pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', cl.strip())
+            if pm:
+                rec.price = pm.group(1) + " EUR"
+                break
 
         wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
         if wt_m:
-            rec.weight_kg = wt_m.group(3).replace(",", ".") + " kg"
+            net   = wt_m.group(1).replace(",", ".")
+            gross = wt_m.group(2).replace(",", ".")
+            rec.weight_kg = f"{net} / {gross} kg"
 
         records.append(rec)
 
