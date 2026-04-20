@@ -15,6 +15,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper
+from .processors.product_db import get_product_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,8 +26,11 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "output"
 MODEL_PATH = BASE_DIR / "models" / "phi-3-mini.gguf"
 
+DATA_DIR = BASE_DIR / "data" / "suppliers"
+
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_TYPES = {
     ".pdf":  "pdf",
@@ -126,6 +130,30 @@ async def extract(
                 "records": [],
                 "output_file": None,
             }
+
+        # Enrich records from product database
+        db = get_product_db(str(DATA_DIR))
+        if db.is_loaded:
+            enriched = 0
+            for rec in records:
+                lookup_key = getattr(rec, "_osram_article", None) or rec.product_code or rec.ean
+                if not lookup_key:
+                    continue
+                info = db.lookup(lookup_key)
+                if not info:
+                    continue
+                if not rec.product_name and info.description:
+                    rec.product_name = info.description
+                if not rec.ean and (info.ean or info.main_barcode):
+                    rec.ean = info.ean or info.main_barcode
+                if not rec.price and info.unit_price:
+                    rec.price = info.unit_price
+                # For OSRAM records product_code comes from DB internal code (e.g. LEDIL432)
+                if info.internal_code and (not rec.product_code or rec.extraction_method == "osram"):
+                    rec.product_code = info.internal_code
+                enriched += 1
+            if enriched:
+                logger.info("Enriched %d records from product DB", enriched)
 
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
 

@@ -9,7 +9,8 @@ from ..processors.field_mapper import ProductRecord
 COLUMNS = [
     ("Код на продукта",         "product_code",  20),
     ("Количество",              "quantity",       12),
-    ("Доставна цена (с/без ДДС)","price",         22),
+    ("Цена за брой",            "price",         18),
+    ("Обща сума",               "total_price",   18),
     ("Име на продукта",         "product_name",   40),
     ("EAN / Баркод",            "ean",            18),
     ("Килограми (бруто/нето)",  "weight_kg",      22),
