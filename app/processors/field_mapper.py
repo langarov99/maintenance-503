@@ -295,22 +295,11 @@ def extract_osram_products(text: str) -> list[ProductRecord]:
     """
     Extract product rows from OSRAM delivery note.
 
-    Invoice block structure (one block per position number):
-      000020  5  LEDPWL ACC 103 30X1  OSRAM  ...  53,85   <- pos / qty / name / price
-                 АВТОМОБИЛНА ОСВЕТИТЕЛНА ТЕХНИКА   HS_code
-      30  30     4062172294805  AM460790055  Китай  1,200/1,232/0,009
-      20  (5FS)                             Нетна цена
-                                            10,77/ 1 PCE   <- unit price
+    Primary method: anchor on OSRAM article number (AM460790055 etc.)
+    The article line also contains EAN, weight triplet, and country.
+    Quantity and price are found in the surrounding context lines.
     """
     lines = text.splitlines()
-
-    # Split text into product blocks by position number lines
-    block_starts = [i for i, l in enumerate(lines) if _POS_RE.match(l.strip())]
-
-    if block_starts:
-        return _parse_osram_blocks(lines, block_starts)
-
-    # Fallback: anchor on article number
     return _parse_osram_by_article(lines)
 
 
@@ -388,49 +377,61 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
 
 
 def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
-    """Fallback when position numbers are not detected."""
+    """Primary extractor: anchor on OSRAM article number (AM/AA prefix codes)."""
     records = []
     for i, line in enumerate(lines):
         m = OSRAM_ARTICLE_RE.search(line.strip())
         if not m:
             continue
 
-        ctx_lines = lines[max(0, i - 3):i + 8]
+        # Context: 4 lines before article (contains pos/qty/desc lines) + 8 after
+        ctx_lines = lines[max(0, i - 4):i + 9]
         ctx = "\n".join(ctx_lines)
 
         rec = ProductRecord(extraction_method="osram")
         osram_article = m.group(1)
-        rec.product_code = osram_article      # best we can do without pos-line context
-        rec._osram_article = osram_article    # type: ignore[attr-defined]
+        # Use AM article as product_code; DB lookup will overwrite with internal code
+        rec.product_code = osram_article
+        rec._osram_article = osram_article  # type: ignore[attr-defined]
 
+        # EAN: 13 or 14 digit number on same line as article or nearby
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ctx)
         if ean_m:
             rec.ean = ean_m.group(1)
 
-        qty_m = _QTY_RE.search(ctx)
-        if not qty_m:
-            continue
-        rec.quantity = qty_m.group(1) + " PCE"
+        # Quantity: "N Брой" or "N PCE" — skip "1 PCE" from price lines
+        for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', ctx, re.IGNORECASE):
+            qty_val = int(qty_m.group(1))
+            # "1 PCE" in "10,77/ 1 PCE" is the price denominator, not quantity
+            before = ctx[max(0, qty_m.start() - 10):qty_m.start()]
+            if re.search(r'[\d,./]\s*$', before) and qty_val == 1:
+                continue
+            rec.quantity = str(qty_val) + " PCE"
+            break
 
         # Unit price: "10,77/ 1 PCE"
         up_m = _UNIT_PRICE_RE.search(ctx)
         if up_m:
             rec.price = up_m.group(1).replace(",", ".") + " EUR"
 
-        # Total price: rightmost decimal on the pos-number line
-        for cl in ctx_lines[:4]:
-            pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', cl.strip())
-            if pm:
-                rec.total_price = pm.group(1) + " EUR"
+        # Total price: rightmost decimal on a pos-number line (000020 ... 53,85)
+        for cl in ctx_lines:
+            if _POS_RE.match(cl.strip()):
+                pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', cl.strip())
+                if pm:
+                    rec.total_price = pm.group(1) + " EUR"
                 break
 
+        # Weight: net / gross kg from triplet (3rd value is cbm volume, ignored)
         wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
         if wt_m:
             net   = wt_m.group(1).replace(",", ".")
             gross = wt_m.group(2).replace(",", ".")
             rec.weight_kg = f"{net} / {gross} kg"
 
-        records.append(rec)
+        # Must have at least quantity to be a real product row
+        if rec.quantity:
+            records.append(rec)
 
     seen: set[str] = set()
     return [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
