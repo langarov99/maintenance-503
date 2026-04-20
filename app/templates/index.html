@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Extraction Bot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f4f8; color: #1a2e44; min-height: 100vh; }
+
+    header {
+      background: linear-gradient(135deg, #1F4E79 0%, #2e86c1 100%);
+      color: #fff; padding: 18px 32px;
+      display: flex; align-items: center; gap: 14px;
+    }
+    header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: .5px; }
+    header small { font-size: .8rem; opacity: .75; }
+
+    main { max-width: 900px; margin: 36px auto; padding: 0 16px; }
+
+    .card {
+      background: #fff; border-radius: 12px; padding: 28px 32px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08); margin-bottom: 24px;
+    }
+    .card h2 { font-size: 1rem; color: #1F4E79; margin-bottom: 18px; font-weight: 600; }
+
+    /* Drop zone */
+    #dropzone {
+      border: 2.5px dashed #90bfe0; border-radius: 10px;
+      padding: 48px 24px; text-align: center; cursor: pointer;
+      transition: all .2s; background: #f7fbff;
+    }
+    #dropzone.dragover { border-color: #1F4E79; background: #dbedfb; }
+    #dropzone .icon { font-size: 3rem; margin-bottom: 10px; }
+    #dropzone p { color: #5a7fa0; font-size: .95rem; }
+    #dropzone strong { color: #1F4E79; }
+    #fileInput { display: none; }
+    #filename { margin-top: 10px; font-size: .85rem; color: #2e86c1; font-weight: 600; min-height: 20px; }
+
+    /* Language selector */
+    .lang-grid {
+      display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px;
+    }
+    .lang-btn {
+      padding: 6px 16px; border: 2px solid #cde3f5; border-radius: 20px;
+      background: #f7fbff; cursor: pointer; font-size: .85rem; font-weight: 600;
+      color: #1F4E79; transition: all .15s; user-select: none;
+    }
+    .lang-btn.active { background: #1F4E79; color: #fff; border-color: #1F4E79; }
+
+    /* Submit */
+    #submitBtn {
+      width: 100%; padding: 14px; margin-top: 20px;
+      background: linear-gradient(135deg, #1F4E79, #2e86c1);
+      color: #fff; border: none; border-radius: 8px; font-size: 1rem;
+      font-weight: 700; cursor: pointer; letter-spacing: .5px;
+      transition: opacity .2s;
+    }
+    #submitBtn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* Progress */
+    #progress { display: none; margin-top: 16px; }
+    .progress-bar-wrap { background: #e0edf8; border-radius: 8px; height: 8px; overflow: hidden; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, #1F4E79, #2e86c1);
+      width: 0%; transition: width .4s; border-radius: 8px; }
+    .progress-label { font-size: .8rem; color: #5a7fa0; margin-top: 6px; text-align: center; }
+
+    /* Status badge */
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: .75rem; font-weight: 700; }
+    .badge-regex  { background: #d4edda; color: #155724; }
+    .badge-table  { background: #cce5ff; color: #004085; }
+    .badge-llm    { background: #fff3cd; color: #856404; }
+    .badge-ocr    { background: #e2d9f3; color: #4a0e8f; }
+
+    /* Results */
+    #results { display: none; }
+    .result-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px; flex-wrap: wrap; gap: 10px;
+    }
+    .result-header h2 { font-size: 1rem; color: #1F4E79; font-weight: 600; }
+    #downloadBtn {
+      padding: 8px 20px; background: #27ae60; color: #fff;
+      border: none; border-radius: 6px; font-weight: 700; cursor: pointer;
+      font-size: .9rem; text-decoration: none; display: inline-block;
+    }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; min-width: 700px; }
+    thead th {
+      background: #1F4E79; color: #fff; padding: 10px 8px;
+      text-align: left; font-weight: 600; white-space: nowrap;
+    }
+    tbody tr:nth-child(even) { background: #f0f7ff; }
+    tbody td { padding: 8px; border-bottom: 1px solid #e0edf8; vertical-align: top; }
+    tbody td:empty::after { content: "—"; color: #bbb; }
+
+    .alert { padding: 12px 16px; border-radius: 8px; font-size: .9rem; margin-top: 12px; }
+    .alert-error { background: #fde8e8; color: #8b0000; border-left: 4px solid #e74c3c; }
+    .alert-success { background: #d4edda; color: #155724; border-left: 4px solid #27ae60; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>&#128196; Data Extraction Bot</h1>
+      <small>Локален инструмент за извличане на продуктови данни</small>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>1. Изберете файл</h2>
+      <div id="dropzone" onclick="document.getElementById('fileInput').click()">
+        <div class="icon">&#128229;</div>
+        <p>Пуснете файл тук или <strong>натиснете за избор</strong></p>
+        <p style="font-size:.8rem;margin-top:6px">PDF &bull; Excel (.xlsx/.xls/.csv) &bull; Текст (.txt) &bull; Снимка (.jpg/.png/.tiff)</p>
+        <div id="filename"></div>
+      </div>
+      <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.xlsm,.csv,.txt,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp">
+
+      <h2 style="margin-top:24px">2. Език(ци) на документа</h2>
+      <div class="lang-grid" id="langGrid">
+        <div class="lang-btn active" data-lang="bg">&#127463;&#127468; Български</div>
+        <div class="lang-btn active" data-lang="en">&#127468;&#127463; Английски</div>
+        <div class="lang-btn" data-lang="pl">&#127477;&#127473; Полски</div>
+        <div class="lang-btn" data-lang="cs">&#127464;&#127487; Чешки</div>
+        <div class="lang-btn" data-lang="it">&#127470;&#127481; Италиански</div>
+        <div class="lang-btn" data-lang="de">&#127465;&#127466; Немски</div>
+      </div>
+
+      <button id="submitBtn" disabled>&#9889; Извличане на данни</button>
+
+      <div id="progress">
+        <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="progress-label" id="progressLabel">Обработка...</div>
+      </div>
+      <div id="alertBox"></div>
+    </div>
+
+    <div class="card" id="results">
+      <div class="result-header">
+        <h2>Резултати <span id="methodBadge"></span></h2>
+        <a id="downloadBtn" href="#">&#11015; Свали Excel</a>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Код на продукта</th>
+              <th>Количество</th>
+              <th>Цена (с/без ДДС)</th>
+              <th>Име на продукта</th>
+              <th>EAN / Баркод</th>
+              <th>Кг (бруто/нето)</th>
+              <th>Бр. в комплект</th>
+              <th>Цвят</th>
+            </tr>
+          </thead>
+          <tbody id="resultBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+<script>
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const submitBtn = document.getElementById('submitBtn');
+  const resultBody = document.getElementById('resultBody');
+  const resultsCard = document.getElementById('results');
+  const progressDiv = document.getElementById('progress');
+  const progressBar = document.getElementById('progressBar');
+  const progressLabel = document.getElementById('progressLabel');
+  const alertBox = document.getElementById('alertBox');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const methodBadge = document.getElementById('methodBadge');
+
+  let selectedFile = null;
+
+  // Drag & drop
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault(); dropzone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files.length) setFile(fileInput.files[0]); });
+
+  function setFile(f) {
+    selectedFile = f;
+    document.getElementById('filename').textContent = '📄 ' + f.name + ' (' + (f.size/1024).toFixed(1) + ' KB)';
+    submitBtn.disabled = false;
+  }
+
+  // Language toggle
+  document.getElementById('langGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.lang-btn');
+    if (!btn) return;
+    btn.classList.toggle('active');
+    // At least one must stay active
+    const active = document.querySelectorAll('.lang-btn.active');
+    if (active.length === 0) btn.classList.add('active');
+  });
+
+  function getLanguages() {
+    return [...document.querySelectorAll('.lang-btn.active')].map(b => b.dataset.lang).join(',');
+  }
+
+  // Submit
+  submitBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    alertBox.innerHTML = '';
+    resultsCard.style.display = 'none';
+    progressDiv.style.display = 'block';
+    submitBtn.disabled = true;
+    animateProgress();
+
+    const fd = new FormData();
+    fd.append('file', selectedFile);
+    fd.append('languages', getLanguages());
+
+    try {
+      const resp = await fetch('/extract', { method: 'POST', body: fd });
+      const data = await resp.json();
+      progressBar.style.width = '100%';
+      progressLabel.textContent = 'Готово!';
+
+      if (!resp.ok || !data.success) {
+        showAlert(data.detail || data.message || 'Грешка при обработка.', 'error');
+        return;
+      }
+
+      renderResults(data);
+    } catch (err) {
+      showAlert('Мрежова грешка: ' + err.message, 'error');
+    } finally {
+      submitBtn.disabled = false;
+      setTimeout(() => { progressDiv.style.display = 'none'; progressBar.style.width = '0%'; }, 1500);
+    }
+  });
+
+  function animateProgress() {
+    let w = 0;
+    const steps = [10, 35, 60, 80, 90];
+    const labels = ['Четене на файл...', 'OCR обработка...', 'Анализ на структура...', 'Извличане на полета...', 'Генериране на Excel...'];
+    steps.forEach((target, i) => {
+      setTimeout(() => {
+        progressBar.style.width = target + '%';
+        progressLabel.textContent = labels[i];
+      }, i * 800);
+    });
+  }
+
+  function renderResults(data) {
+    resultBody.innerHTML = '';
+    const fields = ['product_code','quantity','price','product_name','ean','weight_kg','parts_in_set','color'];
+
+    data.records.forEach((rec, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${idx+1}</td>` + fields.map(f => `<td>${rec[f] || ''}</td>`).join('');
+      resultBody.appendChild(tr);
+    });
+
+    // Method badge
+    const methods = [...new Set(data.records.map(r => r.extraction_method))];
+    const m = methods[0] || '';
+    const badgeClass = m.includes('llm') ? 'badge-llm' : m === 'table' ? 'badge-table' : m === 'regex' ? 'badge-regex' : 'badge-ocr';
+    const labels = { table:'Таблица', regex:'Regex', llm:'AI/LLM', llm_failed:'AI (частично)', ocr:'OCR' };
+    methodBadge.innerHTML = `<span class="badge ${badgeClass}">${labels[m] || m}</span>`;
+    if (data.extraction_source === 'ocr') {
+      methodBadge.innerHTML += ' <span class="badge badge-ocr">OCR</span>';
+    }
+
+    downloadBtn.href = '/download/' + encodeURIComponent(data.output_file);
+    downloadBtn.download = data.output_file;
+    resultsCard.style.display = 'block';
+    showAlert(data.message, 'success');
+  }
+
+  function showAlert(msg, type) {
+    alertBox.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+  }
+</script>
+</body>
+</html>
