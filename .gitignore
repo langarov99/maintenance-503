@@ -4,6 +4,6 @@ __pycache__/
 *.pyd
 .deps_installed
 uploads/
-output/
+/output/
 models/
 *.gguf

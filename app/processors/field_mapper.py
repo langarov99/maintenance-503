@@ -14,12 +14,13 @@ REGEX_CONFIDENCE_THRESHOLD = 3
 class ProductRecord:
     product_code: Optional[str] = None       # Колона 1
     quantity: Optional[str] = None           # Колона 2
-    price: Optional[str] = None             # Колона 3
-    product_name: Optional[str] = None      # Колона 4
-    ean: Optional[str] = None               # Колона 5
-    weight_kg: Optional[str] = None         # Колона 6
-    parts_in_set: Optional[str] = None      # Колона 7
-    color: Optional[str] = None             # Колона 8
+    price: Optional[str] = None             # Колона 3 — единична цена
+    total_price: Optional[str] = None       # Колона 4 — обща сума (qty × unit price)
+    product_name: Optional[str] = None      # Колона 5
+    ean: Optional[str] = None               # Колона 6
+    weight_kg: Optional[str] = None         # Колона 7
+    parts_in_set: Optional[str] = None      # Колона 8
+    color: Optional[str] = None             # Колона 9
     extraction_method: str = "regex"
 
     def filled_count(self) -> int:
@@ -282,6 +283,9 @@ _WEIGHT_TRIPLET_RE = re.compile(
 # Quantity with Bulgarian or EN unit
 _QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
 
+# Unit price: "10,77/ 1 PCE"
+_UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
+
 
 def _is_osram_document(text: str) -> bool:
     return bool(re.search(r'OSRAM\s+GMBH|ams-osram|OSRAM\s+GmbH', text, re.IGNORECASE))
@@ -355,10 +359,15 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # ── Цена: total line value — rightmost decimal on position line
-        price_m = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', block[0].strip())
-        if price_m:
-            rec.price = price_m.group(1) + " EUR"
+        # ── Единична цена: "10,77/ 1 PCE"
+        up_m = _UNIT_PRICE_RE.search(block_text)
+        if up_m:
+            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+
+        # ── Обща сума: rightmost decimal on position line (e.g. 53,85)
+        total_m = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', block[0].strip())
+        if total_m:
+            rec.total_price = total_m.group(1) + " EUR"
 
         # ── Тегло: Нето / Бруто kg (1st and 2nd values of triplet — 3rd is cbm volume)
         wt_m = _WEIGHT_TRIPLET_RE.search(block_text)
@@ -398,11 +407,16 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             continue
         rec.quantity = qty_m.group(1) + " PCE"
 
-        # Total price: rightmost decimal on the pos-number line (3 lines before article)
+        # Unit price: "10,77/ 1 PCE"
+        up_m = _UNIT_PRICE_RE.search(ctx)
+        if up_m:
+            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+
+        # Total price: rightmost decimal on the pos-number line
         for cl in ctx_lines[:4]:
             pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', cl.strip())
             if pm:
-                rec.price = pm.group(1) + " EUR"
+                rec.total_price = pm.group(1) + " EUR"
                 break
 
         wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
