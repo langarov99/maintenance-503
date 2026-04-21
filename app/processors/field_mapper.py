@@ -271,8 +271,8 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # Used only for product database lookup — NOT shown as product code
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 
-# Position line anchor: 000020, 001110, 001120 etc. (2-5 leading zeros + 1-4 digits = 6 chars total)
-_POS_RE = re.compile(r'^(0{2,5}\d{1,4})\b')
+# Position line anchor: 000020, 001110, 001120 etc. OR 80-002 style (delivery sub-line)
+_POS_RE = re.compile(r'^(0{2,5}\d{1,4}|\d{2,3}-\d{3})\b')
 
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
@@ -429,7 +429,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if not m:
             continue
 
-        before_lines = lines[max(0, i - 8):i]
+        before_lines = lines[max(0, i - 15):i]
         after_lines  = lines[i:min(len(lines), i + 10)]
         ctx_lines    = before_lines + after_lines
         ctx          = "\n".join(ctx_lines)
