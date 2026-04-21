@@ -11,10 +11,16 @@
     header {
       background: linear-gradient(135deg, #1F4E79 0%, #2e86c1 100%);
       color: #fff; padding: 18px 32px;
-      display: flex; align-items: center; gap: 14px;
+      display: flex; align-items: center; justify-content: space-between; gap: 14px;
     }
     header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: .5px; }
     header small { font-size: .8rem; opacity: .75; }
+    header .logo-center {
+      position: absolute; left: 50%; transform: translateX(-50%);
+    }
+    header .logo-center img {
+      height: 48px; display: block; filter: brightness(0) invert(1);
+    }
 
     main { max-width: 900px; margin: 36px auto; padding: 0 16px; }
 
@@ -129,10 +135,13 @@
   </style>
 </head>
 <body>
-  <header>
+  <header style="position:relative;">
     <div>
       <h1>&#128196; Data Extraction Bot</h1>
       <small>Локален инструмент за извличане на продуктови данни</small>
+    </div>
+    <div class="logo-center">
+      <img src="https://autopro.bg/images/logo.png" alt="Autopro logo">
     </div>
   </header>
 
