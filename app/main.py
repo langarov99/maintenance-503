@@ -136,21 +136,22 @@ async def extract(
         if db.is_loaded:
             enriched = 0
             for rec in records:
-                lookup_key = getattr(rec, "_osram_article", None) or rec.product_code or rec.ean
-                if not lookup_key:
-                    continue
-                info = db.lookup(lookup_key)
+                # 1. Try supplier article (AM code) — most specific
+                info = db.lookup(getattr(rec, "_osram_article", None))
+                # 2. Fallback: lookup by EAN extracted from the document
+                if not info and rec.ean:
+                    info = db.lookup(rec.ean)
                 if not info:
                     continue
+                # Product code from DB overrides extracted text for OSRAM records
+                if info.internal_code and rec.extraction_method == "osram":
+                    rec.product_code = info.internal_code
                 if not rec.product_name and info.description:
                     rec.product_name = info.description
                 if not rec.ean and (info.ean or info.main_barcode):
                     rec.ean = info.ean or info.main_barcode
                 if not rec.price and info.unit_price:
                     rec.price = info.unit_price
-                # For OSRAM records product_code comes from DB internal code (e.g. LEDIL432)
-                if info.internal_code and (not rec.product_code or rec.extraction_method == "osram"):
-                    rec.product_code = info.internal_code
                 enriched += 1
             if enriched:
                 logger.info("Enriched %d records from product DB", enriched)

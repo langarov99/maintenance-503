@@ -33,23 +33,27 @@ class ProductDatabase:
         main_file = self.data_dir / "osram-export-all.xlsx"
         ean_file  = self.data_dir / "osram-export-all-ean-code.xlsx"
 
-        if not main_file.exists():
-            logger.warning("Product DB not found: %s", main_file)
-            return
-
-        try:
-            self._load_main(main_file)
-        except Exception as e:
-            logger.error("Failed to load main product file: %s", e)
+        if main_file.exists():
+            try:
+                self._load_main(main_file)
+                logger.info("Main product file loaded: %d records", len(self._by_internal_code))
+            except Exception as e:
+                logger.error("Failed to load main product file: %s", e)
+        else:
+            logger.info("Main product file not found, EAN-only mode: %s", main_file)
 
         if ean_file.exists():
             try:
                 self._load_ean(ean_file)
+                logger.info("EAN file loaded: %d EAN entries", len(self._by_ean))
             except Exception as e:
                 logger.error("Failed to load EAN file: %s", e)
+        else:
+            logger.warning("EAN file not found: %s", ean_file)
 
         self._loaded = True
-        logger.info("Product DB loaded: %d products", len(self._by_internal_code))
+        logger.info("Product DB ready: %d by code, %d by EAN",
+                    len(self._by_internal_code), len(self._by_ean))
 
     def _load_main(self, path: Path):
         df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
@@ -116,7 +120,7 @@ class ProductDatabase:
 
     @property
     def is_loaded(self) -> bool:
-        return self._loaded and bool(self._by_internal_code)
+        return self._loaded and (bool(self._by_internal_code) or bool(self._by_ean))
 
 
 # Singleton
