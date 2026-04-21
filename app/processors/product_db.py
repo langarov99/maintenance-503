@@ -1,4 +1,5 @@
 import logging
+import re
 import pandas as pd
 from pathlib import Path
 from dataclasses import dataclass
@@ -79,43 +80,74 @@ class ProductDatabase:
             if info.supplier_article:
                 self._by_supplier_article[info.supplier_article.upper()] = info
 
+    @staticmethod
+    def _clean_val(val: str) -> str:
+        """Normalize cell value: strip whitespace, remove trailing .0 from numeric strings."""
+        v = val.strip()
+        if v.endswith(".0") and v[:-2].lstrip("-").isdigit():
+            v = v[:-2]
+        return v
+
+    @staticmethod
+    def _find_col(headers: list[str], keywords: list[str]) -> Optional[int]:
+        """Find column index whose header contains any of the keywords."""
+        for kw in keywords:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
     def _load_ean(self, path: Path):
         df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
         df = df.fillna("")
 
-        # A=0 Артикул(код), E=4 Главен баркод, G=6 EAN номер
-        col_art      = df.columns[0]   # A — Артикул (код)
-        col_main_bc  = df.columns[4]   # E — Главен баркод
-        col_ean      = df.columns[6]   # G — EAN номер
+        headers = [str(c).lower().strip() for c in df.columns]
+        logger.info("EAN file columns: %s", headers)
+
+        # Detect columns by header; fall back to fixed positions
+        art_idx = self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) \
+                  if self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) is not None else 0
+        ean_idx = self._find_col(headers, ["ean", "gtin", "баркод", "barcode", "ean номер"]) \
+                  if self._find_col(headers, ["ean", "gtin", "баркод", "barcode", "ean номер"]) is not None else 6
+        bc_idx  = self._find_col(headers, ["главен баркод", "главен", "main barcode", "main"]) \
+                  if self._find_col(headers, ["главен баркод", "главен", "main barcode", "main"]) is not None else 4
+
+        col_art     = df.columns[art_idx]
+        col_ean     = df.columns[ean_idx]
+        col_main_bc = df.columns[bc_idx] if bc_idx < len(df.columns) else None
+
+        logger.info("EAN file mapping — art:%s  ean:%s  bc:%s", col_art, col_ean, col_main_bc)
 
         for _, row in df.iterrows():
-            art_code     = str(row[col_art]).strip().upper()
-            main_barcode = str(row[col_main_bc]).strip()
-            ean_number   = str(row[col_ean]).strip()
+            art_code     = self._clean_val(str(row[col_art]))
+            ean_number   = self._clean_val(str(row[col_ean]))
+            main_barcode = self._clean_val(str(row[col_main_bc])) if col_main_bc else ""
 
-            info = self._by_internal_code.get(art_code)
+            if not ean_number or not re.match(r'^\d{8,14}$', ean_number):
+                continue  # skip rows without a valid EAN
+
+            info = self._by_internal_code.get(art_code.upper())
             if info:
-                # Prefer first non-empty EAN
-                if not info.ean and ean_number:
+                if not info.ean:
                     info.ean = ean_number
                 if not info.main_barcode and main_barcode:
                     info.main_barcode = main_barcode
 
-            # Index by EAN for reverse lookup
-            if ean_number:
-                self._by_ean[ean_number] = info or ProductInfo(
-                    internal_code=art_code, ean=ean_number, main_barcode=main_barcode
-                )
+            self._by_ean[ean_number] = info or ProductInfo(
+                internal_code=art_code,
+                ean=ean_number,
+                main_barcode=main_barcode,
+            )
 
     def lookup(self, code: str) -> Optional[ProductInfo]:
-        """Lookup by supplier article number, internal code, or EAN."""
         if not code or not self._loaded:
             return None
         key = code.strip().upper()
+        ean_key = self._clean_val(code.strip())
         return (
             self._by_supplier_article.get(key) or
             self._by_internal_code.get(key) or
-            self._by_ean.get(key)
+            self._by_ean.get(ean_key)
         )
 
     @property

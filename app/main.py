@@ -184,10 +184,15 @@ async def download(filename: str):
 @app.get("/health")
 async def health():
     mapper = get_mapper()
+    db = get_product_db(str(DATA_DIR))
+    sample_eans = list(db._by_ean.keys())[:5] if db._by_ean else []
     return {
         "status": "ok",
         "llm_available": mapper.llm is not None,
-        "model_path": str(MODEL_PATH),
+        "db_loaded": db.is_loaded,
+        "db_by_code": len(db._by_internal_code),
+        "db_by_ean": len(db._by_ean),
+        "sample_eans": sample_eans,
     }
 
 
