@@ -1098,6 +1098,26 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
 # M-Tech Poland-specific extractor
 # ---------------------------------------------------------------------------
 
+def _clean_num(raw: str) -> str:
+    """Strip non-numeric chars, round to max 3 decimal places, ensure 2 minimum."""
+    p = re.sub(r'[^\d.,]', '', str(raw)).replace(',', '.')
+    if not p:
+        return ""
+    try:
+        val = round(float(p), 3)
+        # Format with 3 decimals then strip trailing zeros, keep minimum 2
+        s = f"{val:.3f}".rstrip('0')
+        if '.' not in s:
+            s += '.00'
+        elif s.endswith('.'):
+            s += '00'
+        elif len(s.split('.')[1]) < 2:
+            s += '0'
+        return s
+    except ValueError:
+        return p
+
+
 def _is_mtech_document(text: str) -> bool:
     return bool(re.search(r'm[-\s]?tech', text, re.IGNORECASE))
 
@@ -1218,12 +1238,12 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
                     rec.quantity = qty_raw
 
             if price_raw:
-                p = re.sub(r'[^\d.,]', '', price_raw).replace(',', '.')
+                p = _clean_num(price_raw)
                 if p:
                     rec.price = p + " EUR"
 
             if total_raw:
-                t = re.sub(r'[^\d.,]', '', total_raw).replace(',', '.')
+                t = _clean_num(total_raw)
                 if t:
                     rec.total_price = t + " EUR"
 
