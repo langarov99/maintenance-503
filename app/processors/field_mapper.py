@@ -286,6 +286,49 @@ _QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
 # Unit price: "10,77/ 1 PCE"
 _UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
 
+# Tokens that mark the start of technical specs on a position line
+_OSRAM_SPEC_RE = re.compile(
+    r'^\d+[.,]\d*[WwVvKk]'   # 1,8W  36V  2700K
+    r'|^\d+[WwVvKk]$'         # 4W  12V
+    r'|^PG\d'                  # PG20-1
+    r'|^G\d+[.\-/]?\d*$'      # G4  G13
+    r'|^E\d+$'                 # E14  E27
+    r'|^\d{4}K$',              # 2700K
+    re.IGNORECASE
+)
+
+
+def _extract_osram_product_code(pos_line: str) -> Optional[str]:
+    """Extract catalog code (e.g. LEDPWL ACC 103 30X1) from a position line.
+
+    Line format: 000020  5  [Cyrillic category]  CODE specs...  OSRAM  price
+    """
+    tokens = pos_line.strip().split()
+    i = 0
+    # Skip position number (000NNN)
+    while i < len(tokens) and _POS_RE.match(tokens[i]):
+        i += 1
+    # Skip quantity (pure integer)
+    if i < len(tokens) and re.match(r'^\d+$', tokens[i]):
+        i += 1
+    # Skip Cyrillic category words
+    while i < len(tokens) and re.search(r'[а-яА-Я]', tokens[i]):
+        i += 1
+    # Collect code tokens until specs / supplier name / price
+    code_tokens = []
+    while i < len(tokens):
+        tok = tokens[i]
+        if _OSRAM_SPEC_RE.match(tok):
+            break
+        if tok.upper().rstrip('.,') in {'OSRAM', 'LEDVANCE', 'PHILIPS'}:
+            break
+        if re.match(r'^\d{1,6}[.,]\d{2}$', tok):
+            break
+        code_tokens.append(tok)
+        i += 1
+    result = ' '.join(code_tokens).strip()
+    return result if len(result) >= 3 else None
+
 
 def _is_osram_document(text: str) -> bool:
     return bool(re.search(r'OSRAM\s+GMBH|ams-osram|OSRAM\s+GmbH', text, re.IGNORECASE))
@@ -384,52 +427,68 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if not m:
             continue
 
-        # Context: 4 lines before article (contains pos/qty/desc lines) + 8 after
-        ctx_lines = lines[max(0, i - 4):i + 9]
-        ctx = "\n".join(ctx_lines)
+        before_lines = lines[max(0, i - 5):i]
+        after_lines  = lines[i:min(len(lines), i + 8)]
+        ctx_lines    = before_lines + after_lines
+        ctx          = "\n".join(ctx_lines)
+        after_ctx    = "\n".join(after_lines)
 
         rec = ProductRecord(extraction_method="osram")
         osram_article = m.group(1)
-        # Use AM article as product_code; DB lookup will overwrite with internal code
-        rec.product_code = osram_article
+        rec.product_code = None           # set from position line below
         rec._osram_article = osram_article  # type: ignore[attr-defined]
 
-        # EAN: 13 or 14 digit number on same line as article or nearby
+        # EAN: 13 or 14 digit number in full context
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ctx)
         if ean_m:
             rec.ean = ean_m.group(1)
 
-        # Quantity: "N Брой" or "N PCE" — skip "1 PCE" from price lines
-        for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', ctx, re.IGNORECASE):
-            qty_val = int(qty_m.group(1))
-            # "1 PCE" in "10,77/ 1 PCE" is the price denominator, not quantity
-            before = ctx[max(0, qty_m.start() - 10):qty_m.start()]
-            if re.search(r'[\d,./]\s*$', before) and qty_val == 1:
-                continue
-            rec.quantity = str(qty_val) + " PCE"
-            break
+        # ── Product code: "LEDPWL ACC 103 30X1" style — from position line
+        for bl in reversed(before_lines):
+            if _POS_RE.match(bl.strip()):
+                pc = _extract_osram_product_code(bl)
+                if pc:
+                    rec.product_code = pc
+                break
+        if not rec.product_code:
+            rec.product_code = osram_article  # fallback
 
-        # Unit price: "10,77/ 1 PCE"
-        up_m = _UNIT_PRICE_RE.search(ctx)
+        # ── Quantity: 2nd token on position line (000NNN  QTY  description...)
+        # Iterate backwards through lines before the article to find nearest pos line
+        for bl in reversed(before_lines):
+            if _POS_RE.match(bl.strip()):
+                tokens = bl.strip().split()
+                # tokens[0]=position, tokens[1]=quantity (pure digits)
+                if len(tokens) >= 2 and re.match(r'^\d+$', tokens[1]):
+                    rec.quantity = tokens[1] + " PCE"
+                break
+        # Fallback: search for explicit "N Брой" in before context
+        if not rec.quantity:
+            for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?)\b', "\n".join(before_lines), re.IGNORECASE):
+                rec.quantity = qty_m.group(1) + " PCE"
+                break
+
+        # ── Unit price: "10,77/ 1 PCE" — look only AFTER the article line
+        # (avoids recycling-fee lines that appear before the article)
+        up_m = _UNIT_PRICE_RE.search(after_ctx)
         if up_m:
             rec.price = up_m.group(1).replace(",", ".") + " EUR"
 
-        # Total price: rightmost decimal on a pos-number line (000020 ... 53,85)
-        for cl in ctx_lines:
-            if _POS_RE.match(cl.strip()):
-                pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', cl.strip())
+        # ── Total price: rightmost decimal on the nearest position line
+        for bl in reversed(before_lines):
+            if _POS_RE.match(bl.strip()):
+                pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', bl.strip())
                 if pm:
                     rec.total_price = pm.group(1) + " EUR"
                 break
 
-        # Weight: net / gross kg from triplet (3rd value is cbm volume, ignored)
+        # ── Weight: net / gross kg (1st and 2nd triplet values; 3rd is cbm)
         wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
         if wt_m:
             net   = wt_m.group(1).replace(",", ".")
             gross = wt_m.group(2).replace(",", ".")
             rec.weight_kg = f"{net} / {gross} kg"
 
-        # Must have at least quantity to be a real product row
         if rec.quantity:
             records.append(rec)
 
