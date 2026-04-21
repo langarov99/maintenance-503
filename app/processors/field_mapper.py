@@ -750,6 +750,106 @@ def extract_avisa_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Amio-specific extractor
+# ---------------------------------------------------------------------------
+
+def _is_amio_document(text: str) -> bool:
+    return bool(re.search(r'\bamio\b', text, re.IGNORECASE))
+
+
+def _parse_amio_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from an Amio invoice.
+
+    Columns: Lp. | Kod produktu/Product number | Nazwa towaru/Product name |
+             EAN | Ilość/Qty | J.m/Unit | VAT/Tax | Cena/Price EUR | Wartość/Value EUR
+
+    Export: product code, product name, EAN, quantity (number only).
+    """
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row containing product code and EAN columns
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if ("kod" in joined or "product number" in joined) and "ean" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    logger.info("Amio: header row at index %d", header_idx)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    code_idx = find(["kod produktu", "product number", "kod"])
+    desc_idx = find(["nazwa towaru", "product name", "nazwa"])
+    ean_idx  = find(["ean"])
+    qty_idx  = find(["ilość", "qty", "quantity"])
+
+    if code_idx is None or ean_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        code = cell(code_idx)
+        # Skip non-product rows: empty codes, row numbers (1–999), summary lines
+        if not code or (code.isdigit() and len(code) <= 3):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        desc = cell(desc_idx) if desc_idx is not None else ""
+        if desc:
+            rec.product_name = desc[:120]
+
+        barcode_raw = cell(ean_idx)
+        if re.match(r'^\d{8,14}$', barcode_raw):
+            rec.ean = barcode_raw
+
+        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        if qty_raw:
+            try:
+                qty_f = float(qty_raw.replace(",", "."))
+                qty_str = str(int(qty_f)) if qty_f == int(qty_f) else str(qty_f)
+            except ValueError:
+                qty_str = qty_raw
+            rec.quantity = qty_str
+
+        records.append(rec)
+
+    return records
+
+
+def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Amio: %d table(s) received", len(tables))
+    records = []
+    seen_codes: set[str] = set()
+    for table in tables:
+        for rec in _parse_amio_table(table):
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+    logger.info("Amio extraction: %d records from %d tables", len(records), len(tables))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -783,6 +883,13 @@ class FieldMapper:
             records = extract_avisa_products(tables, text)
             if records:
                 logger.info("Extraction method: Avisa (%d records)", len(records))
+                return records
+
+        # Step 0d — Amio (explicit selection or auto-detection)
+        if supplier == "amio" or (supplier == "auto" and _is_amio_document(text)):
+            records = extract_amio_products(tables, text)
+            if records:
+                logger.info("Extraction method: Amio (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
