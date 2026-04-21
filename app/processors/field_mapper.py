@@ -429,8 +429,8 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if not m:
             continue
 
-        before_lines = lines[max(0, i - 5):i]
-        after_lines  = lines[i:min(len(lines), i + 8)]
+        before_lines = lines[max(0, i - 8):i]
+        after_lines  = lines[i:min(len(lines), i + 10)]
         ctx_lines    = before_lines + after_lines
         ctx          = "\n".join(ctx_lines)
         after_ctx    = "\n".join(after_lines)
@@ -493,9 +493,16 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
 
         if rec.quantity:
             records.append(rec)
+        else:
+            logger.warning("OSRAM: dropped %s — no quantity found. Context: %s",
+                           osram_article, " | ".join(before_lines[-4:]))
 
     seen: set[str] = set()
-    return [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
+    deduped = [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
+    if len(deduped) < len(records):
+        logger.info("OSRAM dedup: %d → %d (removed %d duplicates)",
+                    len(records), len(deduped), len(records) - len(deduped))
+    return deduped
 
 
 # ---------------------------------------------------------------------------
