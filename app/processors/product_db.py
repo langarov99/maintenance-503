@@ -111,39 +111,41 @@ class ProductDatabase:
         headers = [str(c).lower().strip() for c in df.columns]
         logger.info("EAN file columns: %s", headers)
 
-        # Detect columns by header; fall back to fixed positions
-        art_idx = self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) \
-                  if self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) is not None else 0
-        ean_idx = self._find_col(headers, ["ean", "gtin", "баркод", "barcode", "ean номер"]) \
-                  if self._find_col(headers, ["ean", "gtin", "баркод", "barcode", "ean номер"]) is not None else 6
-        bc_idx  = self._find_col(headers, ["главен баркод", "главен", "main barcode", "main"]) \
-                  if self._find_col(headers, ["главен баркод", "главен", "main barcode", "main"]) is not None else 4
+        # Product code column: first column with keyword, else column A
+        art_idx = self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) or 0
+        col_art = df.columns[art_idx]
 
-        col_art     = df.columns[art_idx]
-        col_ean     = df.columns[ean_idx]
-        col_main_bc = df.columns[bc_idx] if bc_idx < len(df.columns) else None
+        # EAN column: detect by header keyword, then by scanning values for
+        # barcode-like content, then fall back to column C (index 2)
+        ean_idx = self._find_col(headers, ["ean", "gtin", "баркод", "barcode"])
+        if ean_idx is None:
+            # Scan each column: pick the one with the most 8-14 digit values
+            best_col, best_count = None, 0
+            for ci, col in enumerate(df.columns):
+                count = df[col].str.match(r'^\d{8,14}$', na=False).sum()
+                if count > best_count:
+                    best_count, best_col = count, ci
+            ean_idx = best_col if best_col is not None else min(2, len(df.columns) - 1)
 
-        logger.info("EAN file mapping — art:%s  ean:%s  bc:%s", col_art, col_ean, col_main_bc)
+        col_ean = df.columns[ean_idx]
+        logger.info("EAN file mapping — art col:%s  ean col:%s  (total cols: %d)",
+                    col_art, col_ean, len(df.columns))
 
         for _, row in df.iterrows():
-            art_code     = self._clean_val(str(row[col_art]))
-            ean_number   = self._clean_val(str(row[col_ean]))
-            main_barcode = self._clean_val(str(row[col_main_bc])) if col_main_bc else ""
+            art_code   = self._clean_val(str(row[col_art]))
+            ean_number = self._clean_val(str(row[col_ean]))
+
+            if not ean_number or not re.match(r'^\d{8,14}$', ean_number):
+                continue
 
             info = self._by_internal_code.get(art_code.upper())
+            if info and not info.ean:
+                info.ean = ean_number
 
-            # Index every valid barcode value so lookup works regardless of which
-            # column the invoice EAN comes from (column E or column G)
-            for barcode in {ean_number, main_barcode}:
-                if barcode and re.match(r'^\d{8,14}$', barcode):
-                    if info:
-                        if not info.ean:
-                            info.ean = barcode
-                    self._by_ean[barcode] = info or ProductInfo(
-                        internal_code=art_code,
-                        ean=barcode,
-                        main_barcode=main_barcode,
-                    )
+            self._by_ean[ean_number] = info or ProductInfo(
+                internal_code=art_code,
+                ean=ean_number,
+            )
 
     def lookup(self, code: str) -> Optional[ProductInfo]:
         if not code or not self._loaded:
