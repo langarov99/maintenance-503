@@ -537,8 +537,19 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.warning("OSRAM: no quantity for %s. Context: %s",
                            osram_article, " | ".join(before_lines[-4:]))
 
-    seen: set[str] = set()
-    deduped = [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
+    # Dedup by AM article code — each unique AM code gets exactly one record.
+    # Keep the record with the most filled fields (best extraction quality).
+    # Do NOT dedup by product_code here: two different AM codes can legitimately
+    # extract the same catalog code from the same position line.
+    seen_am: dict[str, int] = {}
+    deduped: list[ProductRecord] = []
+    for r in records:
+        am = getattr(r, '_osram_article', None) or r.product_code
+        if am not in seen_am:
+            seen_am[am] = len(deduped)
+            deduped.append(r)
+        elif r.filled_count() > deduped[seen_am[am]].filled_count():
+            deduped[seen_am[am]] = r
     if len(deduped) < len(records):
         logger.info("OSRAM dedup: %d → %d (removed %d duplicates)",
                     len(records), len(deduped), len(records) - len(deduped))
