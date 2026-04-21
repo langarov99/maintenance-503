@@ -271,8 +271,8 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # Used only for product database lookup — NOT shown as product code
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 
-# Position line anchor: 000020, 000030 etc.
-_POS_RE = re.compile(r'^(0{3,5}\d{1,3})\b')
+# Position line anchor: 000020, 001110, 001120 etc. (2-5 leading zeros + 1-4 digits = 6 chars total)
+_POS_RE = re.compile(r'^(0{2,5}\d{1,4})\b')
 
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
