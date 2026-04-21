@@ -130,21 +130,20 @@ class ProductDatabase:
             ean_number   = self._clean_val(str(row[col_ean]))
             main_barcode = self._clean_val(str(row[col_main_bc])) if col_main_bc else ""
 
-            if not ean_number or not re.match(r'^\d{8,14}$', ean_number):
-                continue  # skip rows without a valid EAN
-
             info = self._by_internal_code.get(art_code.upper())
-            if info:
-                if not info.ean:
-                    info.ean = ean_number
-                if not info.main_barcode and main_barcode:
-                    info.main_barcode = main_barcode
 
-            self._by_ean[ean_number] = info or ProductInfo(
-                internal_code=art_code,
-                ean=ean_number,
-                main_barcode=main_barcode,
-            )
+            # Index every valid barcode value so lookup works regardless of which
+            # column the invoice EAN comes from (column E or column G)
+            for barcode in {ean_number, main_barcode}:
+                if barcode and re.match(r'^\d{8,14}$', barcode):
+                    if info:
+                        if not info.ean:
+                            info.ean = barcode
+                    self._by_ean[barcode] = info or ProductInfo(
+                        internal_code=art_code,
+                        ean=barcode,
+                        main_barcode=main_barcode,
+                    )
 
     def lookup(self, code: str) -> Optional[ProductInfo]:
         if not code or not self._loaded:
