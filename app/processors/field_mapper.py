@@ -421,6 +421,8 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
 
 def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     """Primary extractor: anchor on OSRAM article number (AM/AA prefix codes)."""
+    am_hits = sum(1 for l in lines if OSRAM_ARTICLE_RE.search(l.strip()))
+    logger.info("OSRAM extraction: %d total lines, %d AM article hits", len(lines), am_hits)
     records = []
     for i, line in enumerate(lines):
         m = OSRAM_ARTICLE_RE.search(line.strip())

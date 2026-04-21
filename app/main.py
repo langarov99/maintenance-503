@@ -158,12 +158,14 @@ async def extract(
 
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
 
+        text_lines = [l for l in extracted.get("text", "").splitlines() if l.strip()]
         return {
             "success": True,
             "message": f"Успешно извлечени {len(records)} записа.",
             "records": [r.to_dict() for r in records],
             "output_file": Path(out_path).name,
             "extraction_source": extracted.get("source"),
+            "text_lines": len(text_lines),
         }
     finally:
         tmp_path.unlink(missing_ok=True)

@@ -1,7 +1,10 @@
+import logging
 import pdfplumber
 from PIL import Image
 import io
 from .image_extractor import ImageExtractor
+
+logger = logging.getLogger(__name__)
 
 try:
     import fitz  # PyMuPDF
@@ -31,19 +34,23 @@ class PDFExtractor:
         else:
             source = "text"
 
+        lines = [l for l in text.splitlines() if l.strip()]
+        logger.info("PDF extracted: source=%s  chars=%d  lines=%d",
+                    source, len(text), len(lines))
         return {"text": text, "tables": tables, "source": source}
 
     def _extract_text(self, file_path: str) -> str:
-        lines = []
+        pages_text = []
         try:
             with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        lines.append(page_text)
-        except Exception:
-            pass
-        return "\n".join(lines)
+                total = len(pdf.pages)
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    page_text = page.extract_text() or ""
+                    pages_text.append(page_text)
+                    logger.info("  Page %d/%d: %d chars", page_num, total, len(page_text))
+        except Exception as e:
+            logger.error("PDF text extraction error: %s", e)
+        return "\n".join(pages_text)
 
     def _extract_tables(self, file_path: str) -> list[list[list]]:
         tables = []
