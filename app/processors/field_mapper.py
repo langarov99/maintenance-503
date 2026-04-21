@@ -508,6 +508,102 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Rezaw-Plast specific extractor
+# ---------------------------------------------------------------------------
+
+def _is_rezaw_plast_document(text: str) -> bool:
+    return bool(re.search(r'rezaw.?plast', text, re.IGNORECASE))
+
+
+def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from a Rezaw-Plast price list.
+
+    Expected columns: Description | Years of production | Article number | Net Price | EAN CODE
+    Blue brand-header rows have no article number — tracked as context only.
+    """
+    if not table or len(table) < 2:
+        return []
+
+    # Locate header row by looking for 'article' and 'ean' keywords
+    header_idx = None
+    for i, row in enumerate(table[:6]):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "article" in joined and "ean" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    desc_idx  = 0                                          # always first column
+    art_idx   = find(["article", "арт", "number", "номер", "kod", "code"])
+    price_idx = find(["price", "цена", "preis", "net"])
+    ean_idx   = find(["ean", "баркод", "barcode", "gtin"])
+    years_idx = find(["year", "production", "год"])
+
+    if art_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        article_raw = cell(art_idx)
+        # Some cells contain two codes: "210601 / 211201" — take the first
+        art_m = re.match(r'(\d{3,8})', article_raw)
+        # Skip brand/section header rows (no numeric article number)
+        if not art_m:
+            continue
+        article = art_m.group(1)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = article
+
+        # Product name: description + years for full context
+        desc  = cell(desc_idx)
+        years = cell(years_idx) if years_idx is not None else ""
+        name_parts = [p for p in [desc, years] if p and p != article]
+        if name_parts:
+            rec.product_name = " | ".join(name_parts)[:120]
+
+        # Price
+        price_raw = cell(price_idx)
+        if price_raw and re.match(r'^\d+[.,]\d+$', price_raw):
+            rec.price = price_raw.replace(",", ".") + " EUR"
+
+        # EAN
+        ean_raw = cell(ean_idx)
+        if re.match(r'^\d{8,14}$', ean_raw):
+            rec.ean = ean_raw
+
+        records.append(rec)
+
+    return records
+
+
+def extract_rezaw_plast_products(tables: list, text: str = "") -> list[ProductRecord]:
+    records = []
+    for table in tables:
+        records.extend(_parse_rezaw_plast_table(table))
+    logger.info("Rezaw-Plast extraction: %d records from %d tables", len(records), len(tables))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -528,6 +624,13 @@ class FieldMapper:
                 if records:
                     logger.info("Extraction method: OSRAM-specific (%d records)", len(records))
                     return records
+
+        # Step 0b — Rezaw-Plast (explicit selection or auto-detection)
+        if supplier == "rezaw_plast" or (supplier == "auto" and _is_rezaw_plast_document(text)):
+            records = extract_rezaw_plast_products(tables, text)
+            if records:
+                logger.info("Extraction method: Rezaw-Plast (%d records)", len(records))
+                return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
         # Step 1 — try table extraction (highest confidence)
