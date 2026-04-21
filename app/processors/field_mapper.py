@@ -599,10 +599,16 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
 
 
 def extract_rezaw_plast_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.warning("=== REZAW-PLAST: %d table(s) received ===", len(tables))
+    for ti, table in enumerate(tables):
+        logger.warning("  Table %d: %d rows x %d cols",
+                       ti, len(table), len(table[0]) if table else 0)
+        if table:
+            logger.warning("  First row sample: %s", str(table[0])[:120])
     records = []
     for table in tables:
         records.extend(_parse_rezaw_plast_table(table))
-    logger.info("Rezaw-Plast extraction: %d records from %d tables", len(records), len(tables))
+    logger.warning("=== REZAW-PLAST: extracted %d records ===", len(records))
     return records
 
 
