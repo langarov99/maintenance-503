@@ -515,17 +515,21 @@ class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
 
-    def map(self, extracted: dict) -> list[ProductRecord]:
+    def map(self, extracted: dict, supplier: str = "auto") -> list[ProductRecord]:
         tables = extracted.get("tables", [])
         text = extracted.get("text", "")
 
-        # Step 0 — OSRAM supplier detection (before generic table/regex)
-        if text and _is_osram_document(text):
-            records = extract_osram_products(text)
-            if records:
-                logger.info("Extraction method: OSRAM-specific (%d records)", len(records))
-                return records
+        logger.info("Extraction requested: supplier=%s", supplier)
 
+        # Step 0 — OSRAM (explicit selection or auto-detection)
+        if supplier == "osram" or (supplier == "auto" and text and _is_osram_document(text)):
+            if text:
+                records = extract_osram_products(text)
+                if records:
+                    logger.info("Extraction method: OSRAM-specific (%d records)", len(records))
+                    return records
+
+        # For explicitly selected non-OSRAM supplier skip straight to table/regex
         # Step 1 — try table extraction (highest confidence)
         records = []
         for table in tables:

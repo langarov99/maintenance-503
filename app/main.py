@@ -102,6 +102,7 @@ async def index(request: Request):
 async def extract(
     file: UploadFile = File(...),
     languages: str = Form(default="bg,en"),
+    supplier: str = Form(default="auto"),
 ):
     suffix = Path(file.filename).suffix.lower()
     file_type = SUPPORTED_TYPES.get(suffix)
@@ -121,7 +122,7 @@ async def extract(
         extractor = get_extractor(file_type, lang_list)
         extracted = extractor.extract(str(tmp_path))
         mapper = get_mapper()
-        records = mapper.map(extracted)
+        records = mapper.map(extracted, supplier=supplier)
 
         if not records:
             return {
@@ -186,6 +187,7 @@ async def extract(
             "output_file": Path(out_path).name,
             "extraction_source": extracted.get("source"),
             "text_lines": len(text_lines),
+            "supplier": supplier,
         }
     finally:
         tmp_path.unlink(missing_ok=True)

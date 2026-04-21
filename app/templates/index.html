@@ -37,6 +37,29 @@
     #fileInput { display: none; }
     #filename { margin-top: 10px; font-size: .85rem; color: #2e86c1; font-weight: 600; min-height: 20px; }
 
+    /* Supplier grid */
+    .supplier-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 8px; margin-top: 8px;
+    }
+    .supplier-btn {
+      padding: 8px 12px; border: 2px solid #cde3f5; border-radius: 8px;
+      background: #f7fbff; cursor: pointer; font-size: .82rem; font-weight: 600;
+      color: #1F4E79; transition: all .15s; user-select: none; text-align: center;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .supplier-btn:hover { border-color: #2e86c1; background: #e8f4fd; }
+    .supplier-btn.active {
+      background: #1F4E79; color: #fff; border-color: #1F4E79;
+    }
+    .supplier-btn.auto-btn {
+      border-style: dashed; color: #5a7fa0;
+    }
+    .supplier-btn.auto-btn.active {
+      background: #5a7fa0; border-color: #5a7fa0; color: #fff; border-style: solid;
+    }
+
     /* Language selector */
     .lang-grid {
       display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px;
@@ -120,7 +143,33 @@
       </div>
       <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.xlsm,.csv,.txt,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp">
 
-      <h2 style="margin-top:24px">2. Език(ци) на документа</h2>
+      <h2 style="margin-top:24px">2. Доставчик</h2>
+      <div class="supplier-grid" id="supplierGrid">
+        <div class="supplier-btn auto-btn active" data-supplier="auto">&#128269; Автоматично</div>
+        <div class="supplier-btn" data-supplier="amio">Amio</div>
+        <div class="supplier-btn" data-supplier="bosch">Bosch</div>
+        <div class="supplier-btn" data-supplier="farad">Farad</div>
+        <div class="supplier-btn" data-supplier="frogum">Frogum</div>
+        <div class="supplier-btn" data-supplier="gelly_plast">Gelly Plast</div>
+        <div class="supplier-btn" data-supplier="geter_hosaja">Geter &amp; Hosaja</div>
+        <div class="supplier-btn" data-supplier="gumarny_zubri">Gumarny Zubri</div>
+        <div class="supplier-btn" data-supplier="hakr">Hakr</div>
+        <div class="supplier-btn" data-supplier="kegel_blazusiak">Kegel-Blazusiak</div>
+        <div class="supplier-btn" data-supplier="mafra">Ma*Fra</div>
+        <div class="supplier-btn" data-supplier="maxton_design">Maxton Design</div>
+        <div class="supplier-btn" data-supplier="osram">Osram</div>
+        <div class="supplier-btn" data-supplier="petex">Petex</div>
+        <div class="supplier-btn" data-supplier="rati">Rati</div>
+        <div class="supplier-btn" data-supplier="rezaw_plast">Rezaw-Plast</div>
+        <div class="supplier-btn" data-supplier="rigum">Rigum</div>
+        <div class="supplier-btn" data-supplier="sonax">Sonax</div>
+        <div class="supplier-btn" data-supplier="team_heko">Team Heko</div>
+        <div class="supplier-btn" data-supplier="tompar">ToMPaR</div>
+        <div class="supplier-btn" data-supplier="turtle_wax">Turtle Wax</div>
+        <div class="supplier-btn" data-supplier="vinove">Vinove</div>
+      </div>
+
+      <h2 style="margin-top:24px">3. Език(ци) на документа</h2>
       <div class="lang-grid" id="langGrid">
         <div class="lang-btn active" data-lang="bg">&#127463;&#127468; Български</div>
         <div class="lang-btn active" data-lang="en">&#127468;&#127463; Английски</div>
@@ -152,7 +201,7 @@
               <th>Код на продукта</th>
               <th>Количество</th>
               <th>Цена (с/без ДДС)</th>
-              <th>Име на продукта</th>
+              <th>Ime на продукта</th>
               <th>EAN / Баркод</th>
               <th>Кг (бруто/нето)</th>
               <th>Бр. в комплект</th>
@@ -195,12 +244,24 @@
     submitBtn.disabled = false;
   }
 
-  // Language toggle
+  // Supplier selection (single-select)
+  document.getElementById('supplierGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.supplier-btn');
+    if (!btn) return;
+    document.querySelectorAll('.supplier-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+
+  function getSupplier() {
+    const active = document.querySelector('.supplier-btn.active');
+    return active ? active.dataset.supplier : 'auto';
+  }
+
+  // Language toggle (multi-select)
   document.getElementById('langGrid').addEventListener('click', e => {
     const btn = e.target.closest('.lang-btn');
     if (!btn) return;
     btn.classList.toggle('active');
-    // At least one must stay active
     const active = document.querySelectorAll('.lang-btn.active');
     if (active.length === 0) btn.classList.add('active');
   });
@@ -221,6 +282,7 @@
     const fd = new FormData();
     fd.append('file', selectedFile);
     fd.append('languages', getLanguages());
+    fd.append('supplier', getSupplier());
 
     try {
       const resp = await fetch('/extract', { method: 'POST', body: fd });
@@ -243,7 +305,6 @@
   });
 
   function animateProgress() {
-    let w = 0;
     const steps = [10, 35, 60, 80, 90];
     const labels = ['Четене на файл...', 'OCR обработка...', 'Анализ на структура...', 'Извличане на полета...', 'Генериране на Excel...'];
     steps.forEach((target, i) => {
@@ -268,10 +329,13 @@
     const methods = [...new Set(data.records.map(r => r.extraction_method))];
     const m = methods[0] || '';
     const badgeClass = m.includes('llm') ? 'badge-llm' : m === 'table' ? 'badge-table' : m === 'regex' ? 'badge-regex' : 'badge-ocr';
-    const labels = { table:'Таблица', regex:'Regex', llm:'AI/LLM', llm_failed:'AI (частично)', ocr:'OCR' };
+    const labels = { table:'Таблица', regex:'Regex', llm:'AI/LLM', llm_failed:'AI (частично)', ocr:'OCR', osram:'OSRAM' };
     methodBadge.innerHTML = `<span class="badge ${badgeClass}">${labels[m] || m}</span>`;
     if (data.extraction_source === 'ocr') {
       methodBadge.innerHTML += ' <span class="badge badge-ocr">OCR</span>';
+    }
+    if (data.supplier && data.supplier !== 'auto') {
+      methodBadge.innerHTML += ` <span class="badge badge-table">${data.supplier_label || data.supplier}</span>`;
     }
 
     downloadBtn.href = '/download/' + encodeURIComponent(data.output_file);
