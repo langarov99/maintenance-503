@@ -967,7 +967,8 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         if qty_raw:
             try:
                 qty_f = float(qty_raw.replace(",", "."))
-                rec.quantity = str(int(qty_f)) if qty_f == int(qty_f) else str(qty_f)
+                n = int(qty_f) if qty_f == int(qty_f) else qty_f
+                rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
             except ValueError:
                 rec.quantity = qty_raw
 
@@ -1018,9 +1019,13 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        # Quantity
+        # Quantity with Bulgarian unit label
         qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
-        quantity = qty_m.group(1) if qty_m else None
+        if qty_m:
+            n = int(qty_m.group(1))
+            quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+        else:
+            quantity = None
 
         # Two prices on each line: Cena netto EUR (unit) and Wartość netto EUR (total)
         prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', line)
