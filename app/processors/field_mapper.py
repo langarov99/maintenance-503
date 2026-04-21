@@ -1155,6 +1155,10 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             return str(row[idx] or "").strip()
 
         data_rows = table[header_idx + 1:]
+        # Debug: log first 8 data rows to understand structure
+        for di, dr in enumerate(data_rows[:8]):
+            logger.info("M-Tech data[%d]: %s", di, [str(c or '')[:25] for c in dr[:6]])
+
         i = 0
         while i < len(data_rows):
             row1 = data_rows[i]
