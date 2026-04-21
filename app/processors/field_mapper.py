@@ -505,14 +505,6 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
 
-        # Fallback: GS1-128 barcode line has standalone qty after 18-digit code
-        # e.g. "000004062172416160 1200 4FS..." → qty = 1200
-        if not rec.quantity:
-            gs1_qty_m = re.search(
-                r'(?<!\d)0{5}\d{13}(?!\d)\s+(\d{1,5})\s', ctx)
-            if gs1_qty_m:
-                rec.quantity = gs1_qty_m.group(1) + " PCE"
-
         # Final fallback: any "N PCE/STK/Брой" in full context (max 5 digits)
         if not rec.quantity:
             qty_m = _QTY_RE.search(ctx)
