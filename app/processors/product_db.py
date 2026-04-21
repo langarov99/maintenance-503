@@ -82,9 +82,16 @@ class ProductDatabase:
 
     @staticmethod
     def _clean_val(val: str) -> str:
-        """Normalize cell value: strip whitespace, remove trailing .0 from numeric strings."""
+        """Normalize cell value: handle scientific notation and trailing .0 from numeric strings."""
         v = val.strip()
-        if v.endswith(".0") and v[:-2].lstrip("-").isdigit():
+        # Scientific notation: "4.062172416160e+12" → "4062172416160"
+        if re.search(r'[eE][+\-]?\d+', v):
+            try:
+                v = str(int(float(v)))
+            except (ValueError, OverflowError):
+                pass
+        # Trailing .0: "4062172416160.0" → "4062172416160"
+        elif v.endswith(".0") and v[:-2].lstrip("-").isdigit():
             v = v[:-2]
         return v
 
