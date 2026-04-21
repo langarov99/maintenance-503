@@ -858,6 +858,114 @@ def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Maxton Design-specific extractor
+# ---------------------------------------------------------------------------
+
+def _is_maxton_document(text: str) -> bool:
+    return bool(re.search(r'maxton', text, re.IGNORECASE))
+
+
+def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from a Maxton Design invoice.
+
+    Columns: Lp. | Nazwa towaru/usługi | Ilość | J.m. | VAT |
+             Cena netto EUR | Wartość netto EUR
+
+    Product code is the first token of the description (e.g. BM-3-20-MPACK-FD5G).
+    Export: product_code, product_name, quantity, Wartość netto EUR as price.
+    """
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row containing description and quantity columns
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if ("nazwa" in joined or "product" in joined) and ("ilość" in joined or "qty" in joined or "ilosc" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    logger.info("Maxton: header row at index %d", header_idx)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    desc_idx = find(["nazwa towaru", "product name", "nazwa", "product"])
+    qty_idx  = find(["ilość", "ilosc", "qty", "quantity"])
+    # Wartość netto EUR = last numeric column (rightmost "wartość" or last column)
+    value_idx = find(["wartość netto", "wartosc netto", "wartość", "value eur", "value"])
+    if value_idx is None:
+        value_idx = len(headers) - 1  # fallback: last column
+
+    if desc_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        raw_desc = cell(desc_idx)
+        if not raw_desc:
+            continue
+
+        # Split first token as product code, rest as name
+        parts = raw_desc.split(None, 1)
+        code = parts[0]
+        name = parts[1] if len(parts) > 1 else ""
+
+        # Skip row-number-only or header-like cells
+        if not code or (code.isdigit() and len(code) <= 3):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        if name:
+            rec.product_name = name[:120]
+
+        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        if qty_raw:
+            try:
+                qty_f = float(qty_raw.replace(",", "."))
+                rec.quantity = str(int(qty_f)) if qty_f == int(qty_f) else str(qty_f)
+            except ValueError:
+                rec.quantity = qty_raw
+
+        value_raw = cell(value_idx)
+        if value_raw and re.match(r'^\d+[.,]\d+$', value_raw):
+            rec.price = value_raw.replace(",", ".") + " EUR"
+
+        records.append(rec)
+
+    return records
+
+
+def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Maxton Design: %d table(s) received", len(tables))
+    records = []
+    seen_codes: set[str] = set()
+    for table in tables:
+        for rec in _parse_maxton_table(table):
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+    logger.info("Maxton Design extraction: %d records from %d tables", len(records), len(tables))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -898,6 +1006,13 @@ class FieldMapper:
             records = extract_amio_products(tables, text)
             if records:
                 logger.info("Extraction method: Amio (%d records)", len(records))
+                return records
+
+        # Step 0e — Maxton Design (explicit selection or auto-detection)
+        if supplier == "maxton_design" or (supplier == "auto" and _is_maxton_document(text)):
+            records = extract_maxton_products(tables, text)
+            if records:
+                logger.info("Extraction method: Maxton Design (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
