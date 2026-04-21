@@ -304,25 +304,23 @@ def get_rezaw_plast_db(data_dir: str) -> RezawPlastDatabase:
 
 
 # ---------------------------------------------------------------------------
-# Maxton Design product database
+# Generic supplier name database (Code → Description)
+# Used by Maxton, Avisa, Amio and any future supplier.
+# File format: Excel with two columns — Code and Description.
+# Column headers are auto-detected by keyword (BG/EN).
 # ---------------------------------------------------------------------------
 
-class MaxtonDatabase:
-    """
-    File: maxton-products.xlsx
-    Expected columns: Code (product code) | Description (name)
-    Any column order is accepted — detected by header keywords.
-    """
-
-    def __init__(self, data_dir: str):
+class SupplierNameDatabase:
+    def __init__(self, data_dir: str, filename: str):
         self.data_dir = Path(data_dir)
+        self.filename = filename
         self._by_code: dict[str, ProductInfo] = {}
         self._loaded = False
 
     def load(self):
-        path = self.data_dir / "maxton-products.xlsx"
+        path = self.data_dir / self.filename
         if not path.exists():
-            logger.info("Maxton products file not found: %s", path)
+            logger.info("Supplier DB not found (optional): %s", path)
             self._loaded = True
             return
         try:
@@ -331,15 +329,15 @@ class MaxtonDatabase:
             headers = [str(c).lower().strip() for c in df.columns]
 
             code_idx = ProductDatabase._find_col(
-                headers, ["код", "code", "артикул", "article", "ref"]
+                headers, ["код", "code", "артикул", "article", "ref", "item"]
             ) or 0
             desc_idx = ProductDatabase._find_col(
-                headers, ["описание", "description", "name", "naziv", "naziv", "наименование"]
+                headers, ["описание", "description", "name", "naziv", "наименование"]
             ) or 1
 
             col_code = df.columns[code_idx]
             col_desc = df.columns[desc_idx]
-            logger.info("Maxton products — code col:%s  desc col:%s", col_code, col_desc)
+            logger.info("%s — code:%s  desc:%s", self.filename, col_code, col_desc)
 
             for _, row in df.iterrows():
                 code = str(row[col_code]).strip()
@@ -350,9 +348,9 @@ class MaxtonDatabase:
                     internal_code=code,
                     description=desc or None,
                 )
-            logger.info("Maxton DB loaded: %d records", len(self._by_code))
+            logger.info("%s loaded: %d records", self.filename, len(self._by_code))
         except Exception as e:
-            logger.error("Failed to load Maxton products: %s", e)
+            logger.error("Failed to load %s: %s", self.filename, e)
         self._loaded = True
 
     def lookup(self, code: str) -> Optional[ProductInfo]:
@@ -365,12 +363,31 @@ class MaxtonDatabase:
         return self._loaded and bool(self._by_code)
 
 
-_mx_db: Optional[MaxtonDatabase] = None
+# Singletons — one per supplier
+_mx_db:    Optional[SupplierNameDatabase] = None
+_avisa_db: Optional[SupplierNameDatabase] = None
+_amio_db:  Optional[SupplierNameDatabase] = None
 
 
-def get_maxton_db(data_dir: str) -> MaxtonDatabase:
+def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
     global _mx_db
     if _mx_db is None:
-        _mx_db = MaxtonDatabase(data_dir)
+        _mx_db = SupplierNameDatabase(data_dir, "maxton-products.xlsx")
         _mx_db.load()
     return _mx_db
+
+
+def get_avisa_db(data_dir: str) -> SupplierNameDatabase:
+    global _avisa_db
+    if _avisa_db is None:
+        _avisa_db = SupplierNameDatabase(data_dir, "avisa-products.xlsx")
+        _avisa_db.load()
+    return _avisa_db
+
+
+def get_amio_db(data_dir: str) -> SupplierNameDatabase:
+    global _amio_db
+    if _amio_db is None:
+        _amio_db = SupplierNameDatabase(data_dir, "amio-products.xlsx")
+        _amio_db.load()
+    return _amio_db
