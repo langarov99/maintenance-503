@@ -1142,21 +1142,45 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             return None
 
         no_idx     = find_col(["no.", "no ", "lp.", "pos"]) or 0
-        desc_idx   = find_col(["item description", "description", "item"]) or 1
-        ean_idx    = find_col(["ean", "gtin", "barcode"])
-        qty_idx    = find_col(["qty", "quantity", "ilosc", "ilość"])
-        price_idx  = find_col(["unit price", "unit_price", "cena netto", "price"])
-        total_idx  = find_col(["total net", "total", "wartosc", "wartość netto"])
-        weight_idx = find_col(["weight", "waga"])
+        desc_idx = find_col(["item description", "description", "item"]) or 1
 
         def cell(row, idx):
             if idx is None or idx >= len(row):
                 return ""
-            return str(row[idx] or "").strip()
+            # Strip regular and non-breaking spaces
+            return re.sub(r'[\xa0\s]+', ' ', str(row[idx] or "")).strip()
+
+        # Calibrate actual column positions from the first product's rows.
+        # Header indices are unreliable due to merged cells in the Excel.
+        ean_pos = weight_pos = qty_pos = price_pos = total_pos = None
 
         data_rows = table[header_idx + 1:]
-        # One-time debug: log the first code row and its desc row in full
-        _debug_done = False
+        for dr in data_rows:
+            code = cell(dr, desc_idx)
+            if not (code and re.match(r'^[A-Z][A-Z0-9\-/]{1,15}$', code)):
+                continue
+            # code_row found — desc_row is 2 rows later
+            if data_rows.index(dr) + 2 >= len(data_rows):
+                break
+            desc_row_sample = data_rows[data_rows.index(dr) + 2]
+            for ci, val in enumerate(dr):
+                v = cell(dr, ci)
+                if re.match(r'^\d{8,14}$', v):
+                    ean_pos = ci          # EAN in code row
+                elif re.match(r'^\d+\.\d+$', v) and 0.05 < float(v) < 100:
+                    weight_pos = ci       # Weight in code row (small decimal)
+            for ci, val in enumerate(desc_row_sample):
+                v = cell(desc_row_sample, ci)
+                if ci == ean_pos and re.match(r'^\d+$', v):
+                    qty_pos = ci          # Qty in desc row at same col as EAN
+                elif re.match(r'^\d+[.,]\d{2}$', v) and price_pos is None and ci > (ean_pos or 0):
+                    price_pos = ci        # First clean decimal after qty → unit price
+                elif re.search(r'\d+[.,]\d{2}.*EUR', v) and ci > (price_pos or 0):
+                    total_pos = ci        # "53,15 EUR" pattern → total
+            logger.info("M-Tech calibrated: ean=%s weight=%s qty=%s price=%s total=%s",
+                        ean_pos, weight_pos, qty_pos, price_pos, total_pos)
+            break
+
         i = 0
         while i < len(data_rows):
             row1 = data_rows[i]
@@ -1168,22 +1192,15 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
                 i += 1
                 continue
 
-            if not _debug_done:
-                logger.info("M-Tech code row  (all): %s", [str(c or '')[:15] for c in row1])
-                if i + 2 < len(data_rows):
-                    logger.info("M-Tech desc row  (all): %s", [str(c or '')[:15] for c in data_rows[i + 2]])
-                _debug_done = True
-
-            ean    = cell(row1, ean_idx) if ean_idx is not None else ""
-            weight = cell(row1, weight_idx) if weight_idx is not None else ""
+            ean    = cell(row1, ean_pos) if ean_pos is not None else ""
+            weight = cell(row1, weight_pos) if weight_pos is not None else ""
 
             # Structure per product: [code_row] [number_row] [description_row]
-            # description row is at i+2 (number_row at i+1 is skipped)
             desc_row  = data_rows[i + 2] if i + 2 < len(data_rows) else []
             desc      = cell(desc_row, desc_idx)
-            qty_raw   = cell(desc_row, qty_idx) if qty_idx is not None else ""
-            price_raw = cell(desc_row, price_idx) if price_idx is not None else ""
-            total_raw = cell(desc_row, total_idx) if total_idx is not None else ""
+            qty_raw   = cell(desc_row, qty_pos) if qty_pos is not None else ""
+            price_raw = cell(desc_row, price_pos) if price_pos is not None else ""
+            total_raw = cell(desc_row, total_pos) if total_pos is not None else ""
 
             rec = ProductRecord(extraction_method="table")
             rec.product_code = code
