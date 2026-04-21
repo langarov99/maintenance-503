@@ -524,15 +524,18 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
     if not table or len(table) < 2:
         return []
 
-    # Locate header row by looking for 'article' and 'ean' keywords
+    # Locate header row by looking for 'article' and 'ean' keywords.
+    # Search the full table — Excel files may have many preamble rows before headers.
     header_idx = None
-    for i, row in enumerate(table[:6]):
+    for i, row in enumerate(table):
         joined = " ".join(str(c or "").lower() for c in row)
-        if "article" in joined and "ean" in joined:
+        if "article" in joined and ("ean" in joined or "code" in joined):
             header_idx = i
             break
     if header_idx is None:
+        logger.info("Rezaw-Plast: no header row found in table (%d rows)", len(table))
         return []
+    logger.info("Rezaw-Plast: header row found at index %d", header_idx)
 
     headers = [str(c or "").lower().strip() for c in table[header_idx]]
 
