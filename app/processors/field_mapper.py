@@ -788,10 +788,14 @@ def _parse_amio_table(table: list[list]) -> list[ProductRecord]:
                     return i
         return None
 
-    code_idx = find(["kod produktu", "product number", "kod"])
-    desc_idx = find(["nazwa towaru", "product name", "nazwa"])
-    ean_idx  = find(["ean"])
-    qty_idx  = find(["ilość", "qty", "quantity"])
+    code_idx  = find(["kod produktu", "product number", "kod"])
+    desc_idx  = find(["nazwa towaru", "product name", "nazwa"])
+    ean_idx   = find(["ean"])
+    qty_idx   = find(["ilość", "qty", "quantity"])
+    # Last "value" column — Wartość/Value EUR (last column in table)
+    value_idx = find(["wartosc", "wartość", "value eur", "value"])
+    if value_idx is None and len(headers) > 0:
+        value_idx = len(headers) - 1  # fallback: last column
 
     if code_idx is None or ean_idx is None:
         return []
@@ -830,6 +834,10 @@ def _parse_amio_table(table: list[list]) -> list[ProductRecord]:
             except ValueError:
                 qty_str = qty_raw
             rec.quantity = qty_str
+
+        value_raw = cell(value_idx) if value_idx is not None else ""
+        if value_raw and re.match(r'^\d+[.,]\d+$', value_raw):
+            rec.price = value_raw.replace(",", ".") + " EUR"
 
         records.append(rec)
 
