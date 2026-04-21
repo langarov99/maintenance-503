@@ -440,8 +440,10 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         rec.product_code = None           # set from position line below
         rec._osram_article = osram_article  # type: ignore[attr-defined]
 
-        # EAN: 13 or 14 digit number in full context
-        ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ctx)
+        # EAN is on the same line as the article code in OSRAM invoices.
+        # Search only ±2 lines to avoid picking up EAN from the previous block.
+        ean_narrow = "\n".join(lines[max(0, i - 2):min(len(lines), i + 3)])
+        ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ean_narrow)
         if ean_m:
             rec.ean = ean_m.group(1)
 
