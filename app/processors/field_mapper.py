@@ -496,7 +496,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             if _POS_RE.match(bl.strip()):
                 tokens = bl.strip().split()
                 # tokens[0]=position, tokens[1]=quantity (pure digits)
-                if len(tokens) >= 2 and re.match(r'^\d+$', tokens[1]):
+                if len(tokens) >= 2 and re.match(r'^\d{1,5}$', tokens[1]):
                     rec.quantity = tokens[1] + " PCE"
                 break
         # Fallback: search for "N Брой" in before context
