@@ -1,3 +1,4 @@
+import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -7,16 +8,21 @@ from pathlib import Path
 from ..processors.field_mapper import ProductRecord
 
 COLUMNS = [
-    ("Код на продукта",         "product_code",  20),
-    ("Количество",              "quantity",       12),
-    ("Цена за брой",            "price",         18),
-    ("Обща сума",               "total_price",   18),
-    ("Име на продукта",         "product_name",   40),
-    ("EAN / Баркод",            "ean",            18),
-    ("Килограми (бруто/нето)",  "weight_kg",      22),
-    ("Брой/части в комплект",   "parts_in_set",   20),
-    ("Цвят",                    "color",          16),
+    ("Код на продукта",         "product_code",   20),
+    ("КОЛИЧЕСТВО",              "quantity_num",    12),  # merged with next column
+    ("",                        "quantity_unit",   10),
+    ("Цена за брой",            "price",           18),
+    ("Обща сума",               "total_price",     18),
+    ("Име на продукта",         "product_name",    40),
+    ("EAN / Баркод",            "ean",             18),
+    ("Килограми (бруто/нето)",  "weight_kg",       22),
+    ("Брой/части в комплект",   "parts_in_set",    20),
+    ("Цвят",                    "color",           16),
 ]
+
+# Column indices (1-based) of the two quantity columns to merge in the header
+_QTY_NUM_COL  = next(i+1 for i, (_, f, _) in enumerate(COLUMNS) if f == "quantity_num")
+_QTY_UNIT_COL = next(i+1 for i, (_, f, _) in enumerate(COLUMNS) if f == "quantity_unit")
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
 HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
@@ -24,6 +30,24 @@ ALT_FILL   = PatternFill("solid", fgColor="D6E4F0")
 BORDER_SIDE = Side(style="thin", color="BFBFBF")
 CELL_BORDER = Border(left=BORDER_SIDE, right=BORDER_SIDE,
                      top=BORDER_SIDE, bottom=BORDER_SIDE)
+
+
+def _split_quantity(qty_str: str):
+    """Split '5 PCE' → ('5', 'PCE').  Returns ('', '') if blank."""
+    if not qty_str or not qty_str.strip():
+        return "", ""
+    m = re.match(r'^(\d+(?:[.,]\d+)?)\s*([A-Za-z]*)', qty_str.strip())
+    if m:
+        return m.group(1), m.group(2).upper()
+    return qty_str.strip(), ""
+
+
+def _get_value(rec: ProductRecord, field_name: str) -> str:
+    if field_name == "quantity_num":
+        return _split_quantity(rec.quantity or "")[0]
+    if field_name == "quantity_unit":
+        return _split_quantity(rec.quantity or "")[1]
+    return getattr(rec, field_name, None) or ""
 
 
 def write_excel(records: list[ProductRecord], output_dir: str, source_filename: str) -> str:
@@ -42,11 +66,21 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
 
     ws.row_dimensions[1].height = 30
 
+    # Merge the two quantity header cells into one "КОЛИЧЕСТВО" cell
+    qty_col1 = get_column_letter(_QTY_NUM_COL)
+    qty_col2 = get_column_letter(_QTY_UNIT_COL)
+    ws.merge_cells(f"{qty_col1}1:{qty_col2}1")
+    merged = ws[f"{qty_col1}1"]
+    merged.font = HEADER_FONT
+    merged.fill = HEADER_FILL
+    merged.alignment = Alignment(horizontal="center", vertical="center")
+    merged.border = CELL_BORDER
+
     # Data rows
     for row_idx, rec in enumerate(records, start=2):
         fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
         for col_idx, (_, field_name, _) in enumerate(COLUMNS, start=1):
-            value = getattr(rec, field_name, None) or ""
+            value = _get_value(rec, field_name)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             cell.border = CELL_BORDER

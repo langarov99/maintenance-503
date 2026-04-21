@@ -193,6 +193,7 @@
               <th>#</th>
               <th>Код на продукта</th>
               <th>Количество</th>
+              <th>Ед.</th>
               <th>Цена (с/без ДДС)</th>
               <th>Ime на продукта</th>
               <th>EAN / Баркод</th>
@@ -310,11 +311,25 @@
 
   function renderResults(data) {
     resultBody.innerHTML = '';
-    const fields = ['product_code','quantity','price','product_name','ean','weight_kg','parts_in_set','color'];
+    function splitQty(qty) {
+      if (!qty) return ['', ''];
+      const m = qty.match(/^(\d+(?:[.,]\d+)?)\s*([A-Za-z]*)/);
+      return m ? [m[1], m[2].toUpperCase()] : [qty, ''];
+    }
 
     data.records.forEach((rec, idx) => {
+      const [qNum, qUnit] = splitQty(rec.quantity);
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${idx+1}</td>` + fields.map(f => `<td>${rec[f] || ''}</td>`).join('');
+      tr.innerHTML = `<td>${idx+1}</td>`
+        + `<td>${rec.product_code || ''}</td>`
+        + `<td>${qNum}</td>`
+        + `<td>${qUnit}</td>`
+        + `<td>${rec.price || ''}</td>`
+        + `<td>${rec.product_name || ''}</td>`
+        + `<td>${rec.ean || ''}</td>`
+        + `<td>${rec.weight_kg || ''}</td>`
+        + `<td>${rec.parts_in_set || ''}</td>`
+        + `<td>${rec.color || ''}</td>`;
       resultBody.appendChild(tr);
     });
 
