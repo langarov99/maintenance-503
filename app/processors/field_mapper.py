@@ -635,6 +635,121 @@ def extract_rezaw_plast_products(tables: list, text: str = "") -> list[ProductRe
 
 
 # ---------------------------------------------------------------------------
+# Avisa-specific extractor
+# ---------------------------------------------------------------------------
+
+def _is_avisa_document(text: str) -> bool:
+    return bool(re.search(r'avisa', text, re.IGNORECASE))
+
+
+def _parse_avisa_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from an Avisa invoice.
+
+    Columns: No. | Code | Description | Barcode | Quantity | Unit |
+             Net price (regular) | Discount [%] | Net price (discounted) |
+             Tax rate | Net value | Tax value | Gross value
+
+    Export: Code, Description, Barcode, Quantity, second Net price (after discount).
+    """
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row — must contain "code" and "description"
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "code" in joined and "description" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    logger.info("Avisa: header row at index %d: %s", header_idx, headers)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    code_idx    = find(["code"])
+    desc_idx    = find(["description", "desc"])
+    barcode_idx = find(["barcode", "ean", "bar"])
+    qty_idx     = find(["quantit", "qty"])
+    discount_idx = find(["discount", "rabat", "%"])
+
+    # Second "net price" = the one after the Discount column
+    price_idx = None
+    net_hits = []
+    for i, h in enumerate(headers):
+        if "net price" in h or h.strip() in ("net price", "netprice"):
+            net_hits.append(i)
+    if len(net_hits) >= 2:
+        price_idx = net_hits[1]
+    elif discount_idx is not None:
+        for i in range(discount_idx + 1, len(headers)):
+            if "net" in headers[i]:
+                price_idx = i
+                break
+
+    if code_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        code = cell(code_idx)
+        if not code or code.lower() in ("no.", "no", "#", ""):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        desc = cell(desc_idx) if desc_idx is not None else ""
+        if desc:
+            rec.product_name = desc[:120]
+
+        barcode_raw = cell(barcode_idx) if barcode_idx is not None else ""
+        if re.match(r'^\d{8,14}$', barcode_raw):
+            rec.ean = barcode_raw
+
+        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        if qty_raw:
+            try:
+                qty_f = float(qty_raw.replace(",", "."))
+                qty_str = str(int(qty_f)) if qty_f == int(qty_f) else str(qty_f)
+            except ValueError:
+                qty_str = qty_raw
+            rec.quantity = qty_str + " szt."
+
+        price_raw = cell(price_idx) if price_idx is not None else ""
+        if price_raw and re.match(r'^\d+[.,]\d+$', price_raw):
+            rec.price = price_raw.replace(",", ".") + " EUR"
+
+        records.append(rec)
+
+    return records
+
+
+def extract_avisa_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Avisa: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_avisa_table(table))
+    logger.info("Avisa extraction: %d records from %d tables", len(records), len(tables))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -661,6 +776,13 @@ class FieldMapper:
             records = extract_rezaw_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Rezaw-Plast (%d records)", len(records))
+                return records
+
+        # Step 0c — Avisa (explicit selection or auto-detection)
+        if supplier == "avisa" or (supplier == "auto" and _is_avisa_document(text)):
+            records = extract_avisa_products(tables, text)
+            if records:
+                logger.info("Extraction method: Avisa (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
