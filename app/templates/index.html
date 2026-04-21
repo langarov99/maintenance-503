@@ -53,6 +53,16 @@
     .supplier-btn.active {
       background: #1F4E79; color: #fff; border-color: #1F4E79;
     }
+    .supplier-btn.supported {
+      border-color: #27ae60; color: #1a6e3c; background: #f0faf4;
+    }
+    .supplier-btn.supported:hover { background: #d5f5e3; border-color: #1e8449; }
+    .supplier-btn.supported.active { background: #1e8449; color: #fff; border-color: #1e8449; }
+    .supplier-btn.unsupported {
+      border-color: #e74c3c; color: #922b21; background: #fdf2f2;
+    }
+    .supplier-btn.unsupported:hover { background: #fadbd8; border-color: #c0392b; }
+    .supplier-btn.unsupported.active { background: #c0392b; color: #fff; border-color: #c0392b; }
 
     /* Language selector */
     .lang-grid {
@@ -238,6 +248,19 @@
     document.getElementById('filename').textContent = '📄 ' + f.name + ' (' + (f.size/1024).toFixed(1) + ' KB)';
     submitBtn.disabled = false;
   }
+
+  // Mark supplier buttons green (extractor implemented) or red (not yet)
+  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'osram', 'rezaw_plast']);
+  document.querySelectorAll('.supplier-btn').forEach(btn => {
+    const s = btn.dataset.supplier;
+    if (SUPPORTED_SUPPLIERS.has(s)) {
+      btn.classList.add('supported');
+      btn.title = 'Екстрактор наличен';
+    } else {
+      btn.classList.add('unsupported');
+      btn.title = 'Без екстрактор';
+    }
+  });
 
   // Supplier selection (single-select)
   document.getElementById('supplierGrid').addEventListener('click', e => {
