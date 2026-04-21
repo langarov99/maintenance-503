@@ -1155,34 +1155,27 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             return str(row[idx] or "").strip()
 
         data_rows = table[header_idx + 1:]
-        # Debug: log first 8 data rows to understand structure
-        for di, dr in enumerate(data_rows[:8]):
-            logger.info("M-Tech data[%d]: %s", di, [str(c or '')[:25] for c in dr[:6]])
-
         i = 0
         while i < len(data_rows):
             row1 = data_rows[i]
+            code = cell(row1, desc_idx)
 
-            # Row 1 must have a sequential integer in the No. column
-            no_val = re.sub(r'\.0$', '', cell(row1, no_idx))
-            if not (no_val and no_val.isdigit()):
+            # Product code row: col 1 has a short uppercase code (e.g. CP14W, CP5S)
+            # The No. number appears on the NEXT row, description on the row after that.
+            if not (code and re.match(r'^[A-Z][A-Z0-9\-/]{1,15}$', code)):
                 i += 1
                 continue
 
-            code   = cell(row1, desc_idx)
             ean    = cell(row1, ean_idx) if ean_idx is not None else ""
             weight = cell(row1, weight_idx) if weight_idx is not None else ""
 
-            # Row 2 holds description, qty and prices
-            row2      = data_rows[i + 1] if i + 1 < len(data_rows) else []
-            desc      = cell(row2, desc_idx)
-            qty_raw   = cell(row2, qty_idx) if qty_idx is not None else ""
-            price_raw = cell(row2, price_idx) if price_idx is not None else ""
-            total_raw = cell(row2, total_idx) if total_idx is not None else ""
-
-            if not code or norm(code) in ("item description", "description", "no.", ""):
-                i += 2
-                continue
+            # Structure per product: [code_row] [number_row] [description_row]
+            # description row is at i+2 (number_row at i+1 is skipped)
+            desc_row  = data_rows[i + 2] if i + 2 < len(data_rows) else []
+            desc      = cell(desc_row, desc_idx)
+            qty_raw   = cell(desc_row, qty_idx) if qty_idx is not None else ""
+            price_raw = cell(desc_row, price_idx) if price_idx is not None else ""
+            total_raw = cell(desc_row, total_idx) if total_idx is not None else ""
 
             rec = ProductRecord(extraction_method="table")
             rec.product_code = code
@@ -1213,7 +1206,7 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
                 rec.weight_kg = weight
 
             records.append(rec)
-            i += 2
+            i += 3  # code_row + number_row + desc_row
 
     logger.info("M-Tech extraction: %d records", len(records))
     return records
