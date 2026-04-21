@@ -1155,6 +1155,8 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             return str(row[idx] or "").strip()
 
         data_rows = table[header_idx + 1:]
+        # One-time debug: log the first code row and its desc row in full
+        _debug_done = False
         i = 0
         while i < len(data_rows):
             row1 = data_rows[i]
@@ -1165,6 +1167,12 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             if not (code and re.match(r'^[A-Z][A-Z0-9\-/]{1,15}$', code)):
                 i += 1
                 continue
+
+            if not _debug_done:
+                logger.info("M-Tech code row  (all): %s", [str(c or '')[:15] for c in row1])
+                if i + 2 < len(data_rows):
+                    logger.info("M-Tech desc row  (all): %s", [str(c or '')[:15] for c in data_rows[i + 2]])
+                _debug_done = True
 
             ean    = cell(row1, ean_idx) if ean_idx is not None else ""
             weight = cell(row1, weight_idx) if weight_idx is not None else ""
