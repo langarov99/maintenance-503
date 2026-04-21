@@ -89,7 +89,7 @@ PRODUCT_NAME_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 
 HEADER_ALIASES = {
-    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence"],
+    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence", "article", "number"],
     "quantity":     ["кол", "qty", "quantity", "menge", "anzahl", "quantità", "ilość", "množství", "доставено", "delivered", "geliefert", "consegnato", "поръчано", "ordered", "бр"],
     "price":        ["цена", "price", "preis", "prezzo", "cena", "prix", "единична цена", "unit price"],
     "product_name": ["наименование", "описание", "продукт", "name", "bezeichnung", "nome", "nazwa", "název", "description", "omschrijving", "клиентско", "artikel"],
@@ -133,11 +133,11 @@ def extract_from_table(table: list[list]) -> list[ProductRecord]:
     if not table or len(table) < 2:
         return []
 
-    # Scan up to first 8 rows for header — accumulate best mapping
+    # Scan up to first 100 rows for header (files may have preamble rows)
     best_mapping = {}
     best_row = None
 
-    for row_idx, row in enumerate(table[:8]):
+    for row_idx, row in enumerate(table[:100]):
         mapping = {}
         for col_idx, cell in enumerate(row):
             if not cell or not str(cell).strip():
@@ -170,8 +170,8 @@ def extract_from_table(table: list[list]) -> list[ProductRecord]:
                     barcode = _extract_barcode_from_cell(raw)
                     if barcode:
                         rec.ean = barcode
-        # Skip rows that look like sub-headers or empty
-        if rec.filled_count() >= 1 and rec.product_code and not re.match(r'^[\d\s]+$', rec.product_code or ""):
+        # Skip rows that look like empty or pure-whitespace product codes
+        if rec.filled_count() >= 1 and rec.product_code and rec.product_code.strip():
             records.append(rec)
 
     return records
@@ -599,16 +599,11 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
 
 
 def extract_rezaw_plast_products(tables: list, text: str = "") -> list[ProductRecord]:
-    logger.warning("=== REZAW-PLAST: %d table(s) received ===", len(tables))
-    for ti, table in enumerate(tables):
-        logger.warning("  Table %d: %d rows x %d cols",
-                       ti, len(table), len(table[0]) if table else 0)
-        if table:
-            logger.warning("  First row sample: %s", str(table[0])[:120])
+    logger.info("Rezaw-Plast: %d table(s) received", len(tables))
     records = []
     for table in tables:
         records.extend(_parse_rezaw_plast_table(table))
-    logger.warning("=== REZAW-PLAST: extracted %d records ===", len(records))
+    logger.info("Rezaw-Plast extraction: %d records from %d tables", len(records), len(tables))
     return records
 
 
