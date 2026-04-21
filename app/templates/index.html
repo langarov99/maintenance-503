@@ -258,6 +258,16 @@
     submitBtn.disabled = false;
   }
 
+  // ── Heartbeat: keep server alive while page is open ──────────────────────
+  function sendHeartbeat() { fetch('/heartbeat', { method: 'POST' }).catch(() => {}); }
+  sendHeartbeat();
+  setInterval(sendHeartbeat, 10000);
+
+  // ── Shutdown server when tab/window is closed ─────────────────────────────
+  window.addEventListener('pagehide', e => {
+    if (!e.persisted) navigator.sendBeacon('/shutdown');
+  });
+
   // Mark supplier buttons green (extractor implemented) or red (not yet)
   const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'osram', 'rezaw_plast']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {

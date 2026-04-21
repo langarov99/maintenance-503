@@ -1,10 +1,13 @@
 import logging
 import os
 import shutil
+import signal
+import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
@@ -57,6 +60,40 @@ static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
+# ── Heartbeat-based auto-shutdown ────────────────────────────────────────────
+# JS sends POST /heartbeat every 10s while the page is open.
+# If no heartbeat arrives for 20s, the server shuts down automatically.
+_last_heartbeat: float = time.time()
+_HEARTBEAT_TIMEOUT = 20  # seconds
+
+
+def _heartbeat_monitor():
+    time.sleep(15)  # grace period at startup
+    while True:
+        time.sleep(5)
+        if time.time() - _last_heartbeat > _HEARTBEAT_TIMEOUT:
+            logger.info("No heartbeat for %ds — shutting down.", _HEARTBEAT_TIMEOUT)
+            os.kill(os.getpid(), signal.SIGTERM)
+            break
+
+
+@app.post("/heartbeat")
+async def heartbeat():
+    global _last_heartbeat
+    _last_heartbeat = time.time()
+    return {"ok": True}
+
+
+@app.post("/shutdown")
+async def shutdown():
+    """Explicit shutdown — called when browser tab closes."""
+    def _kill():
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+    threading.Thread(target=_kill, daemon=True).start()
+    return JSONResponse({"ok": True})
+
+
 # Global state — initialized lazily to avoid heavy startup cost
 _extractors: dict = {}
 _mapper: FieldMapper | None = None
@@ -91,6 +128,12 @@ def get_mapper() -> FieldMapper:
             logger.info("No LLM model found at %s — regex-only mode", MODEL_PATH)
         _mapper = FieldMapper(llm=llm)
     return _mapper
+
+
+@app.on_event("startup")
+async def _start_heartbeat_monitor():
+    t = threading.Thread(target=_heartbeat_monitor, daemon=True)
+    t.start()
 
 
 @app.get("/", response_class=HTMLResponse)
