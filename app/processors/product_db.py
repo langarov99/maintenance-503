@@ -173,3 +173,131 @@ def get_product_db(data_dir: str) -> ProductDatabase:
         _db = ProductDatabase(data_dir)
         _db.load()
     return _db
+
+
+# ---------------------------------------------------------------------------
+# Rezaw-Plast product database
+# ---------------------------------------------------------------------------
+
+class RezawPlastDatabase:
+    """
+    File 1 — rezaw-plast-all-export-products.xlsx
+        Код | Описание | Ед_ цена | Продуктова група | ...
+
+    File 2 — rezaw-plast-all-export-ean.xlsx
+        Артикул (код) | Артикул (Описание) | EAN номер
+    """
+
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self._by_code: dict[str, ProductInfo] = {}
+        self._by_ean:  dict[str, ProductInfo] = {}
+        self._loaded = False
+
+    def load(self):
+        products_file = self.data_dir / "rezaw-plast-all-export-products.xlsx"
+        ean_file      = self.data_dir / "rezaw-plast-all-export-ean.xlsx"
+
+        if products_file.exists():
+            try:
+                self._load_products(products_file)
+                logger.info("Rezaw-Plast products loaded: %d records", len(self._by_code))
+            except Exception as e:
+                logger.error("Failed to load Rezaw-Plast products: %s", e)
+        else:
+            logger.info("Rezaw-Plast products file not found: %s", products_file)
+
+        if ean_file.exists():
+            try:
+                self._load_ean(ean_file)
+                logger.info("Rezaw-Plast EAN loaded: %d entries", len(self._by_ean))
+            except Exception as e:
+                logger.error("Failed to load Rezaw-Plast EAN: %s", e)
+        else:
+            logger.info("Rezaw-Plast EAN file not found: %s", ean_file)
+
+        self._loaded = True
+        logger.info("Rezaw-Plast DB ready: %d by code, %d by EAN",
+                    len(self._by_code), len(self._by_ean))
+
+    def _load_products(self, path: Path):
+        df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+        df = df.fillna("")
+        headers = [str(c).lower().strip() for c in df.columns]
+
+        code_idx  = ProductDatabase._find_col(headers, ["код", "code", "артикул"]) or 0
+        desc_idx  = ProductDatabase._find_col(headers, ["описание", "description", "naziv"]) or 1
+        price_idx = ProductDatabase._find_col(headers, ["ед_ цена", "ед.цена", "цена", "price"]) or 2
+
+        col_code  = df.columns[code_idx]
+        col_desc  = df.columns[desc_idx]
+        col_price = df.columns[price_idx]
+
+        logger.info("Rezaw-Plast products — code:%s  desc:%s  price:%s",
+                    col_code, col_desc, col_price)
+
+        for _, row in df.iterrows():
+            code = str(row[col_code]).strip()
+            if not code or code.lower() in ("nan", ""):
+                continue
+            info = ProductInfo(
+                internal_code = code,
+                description   = str(row[col_desc]).strip(),
+                unit_price    = str(row[col_price]).strip(),
+            )
+            self._by_code[code.upper()] = info
+
+    def _load_ean(self, path: Path):
+        df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+        df = df.fillna("")
+        headers = [str(c).lower().strip() for c in df.columns]
+
+        code_idx = ProductDatabase._find_col(headers, ["артикул", "код", "code"]) or 0
+        ean_idx  = ProductDatabase._find_col(headers, ["ean", "баркод", "barcode"])
+        if ean_idx is None:
+            best_col, best_count = None, 0
+            for ci, col in enumerate(df.columns):
+                count = df[col].str.match(r'^\d{8,14}$', na=False).sum()
+                if count > best_count:
+                    best_count, best_col = count, ci
+            ean_idx = best_col if best_col is not None else min(2, len(df.columns) - 1)
+
+        col_code = df.columns[code_idx]
+        col_ean  = df.columns[ean_idx]
+        logger.info("Rezaw-Plast EAN — code col:%s  ean col:%s", col_code, col_ean)
+
+        for _, row in df.iterrows():
+            code = ProductDatabase._clean_val(str(row[col_code]).strip())
+            ean  = ProductDatabase._clean_val(str(row[col_ean]).strip())
+
+            if not ean or not re.match(r'^\d{8,14}$', ean):
+                continue
+
+            info = self._by_code.get(code.upper())
+            if info and not info.ean:
+                info.ean = ean
+
+            self._by_ean[ean] = info or ProductInfo(internal_code=code, ean=ean)
+
+    def lookup(self, code: str) -> Optional[ProductInfo]:
+        if not code or not self._loaded:
+            return None
+        key     = code.strip().upper()
+        ean_key = ProductDatabase._clean_val(code.strip())
+        return self._by_code.get(key) or self._by_ean.get(ean_key)
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded and (bool(self._by_code) or bool(self._by_ean))
+
+
+# Singleton
+_rp_db: Optional[RezawPlastDatabase] = None
+
+
+def get_rezaw_plast_db(data_dir: str) -> RezawPlastDatabase:
+    global _rp_db
+    if _rp_db is None:
+        _rp_db = RezawPlastDatabase(data_dir)
+        _rp_db.load()
+    return _rp_db

@@ -15,7 +15,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord
-from .processors.product_db import get_product_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -132,9 +132,9 @@ async def extract(
                 "output_file": None,
             }
 
-        # Enrich records from product database
+        # Enrich records from product database (OSRAM)
         db = get_product_db(str(DATA_DIR))
-        if db.is_loaded:
+        if supplier in ("auto", "osram") and db.is_loaded:
             enriched = 0
             for rec in records:
                 # 1. Try supplier article (AM code) — most specific
@@ -156,6 +156,27 @@ async def extract(
                 enriched += 1
             if enriched:
                 logger.info("Enriched %d records from product DB", enriched)
+
+        # Enrich records from Rezaw-Plast product database
+        if supplier == "rezaw_plast":
+            rp_db = get_rezaw_plast_db(str(DATA_DIR))
+            if rp_db.is_loaded:
+                enriched_rp = 0
+                for rec in records:
+                    info = rp_db.lookup(rec.product_code)
+                    if not info and rec.ean:
+                        info = rp_db.lookup(rec.ean)
+                    if not info:
+                        continue
+                    if not rec.product_name and info.description:
+                        rec.product_name = info.description
+                    if not rec.ean and info.ean:
+                        rec.ean = info.ean
+                    if not rec.price and info.unit_price:
+                        rec.price = info.unit_price
+                    enriched_rp += 1
+                if enriched_rp:
+                    logger.info("Rezaw-Plast: enriched %d records from DB", enriched_rp)
 
         # Post-enrichment dedup: two AM codes can resolve to the same internal
         # product code after DB lookup — keep the record with the most fields.
@@ -208,15 +229,21 @@ async def download(filename: str):
 @app.get("/health")
 async def health():
     mapper = get_mapper()
-    db = get_product_db(str(DATA_DIR))
-    sample_eans = list(db._by_ean.keys())[:5] if db._by_ean else []
+    db    = get_product_db(str(DATA_DIR))
+    rp_db = get_rezaw_plast_db(str(DATA_DIR))
     return {
         "status": "ok",
         "llm_available": mapper.llm is not None,
-        "db_loaded": db.is_loaded,
-        "db_by_code": len(db._by_internal_code),
-        "db_by_ean": len(db._by_ean),
-        "sample_eans": sample_eans,
+        "osram": {
+            "db_loaded":  db.is_loaded,
+            "by_code":    len(db._by_internal_code),
+            "by_ean":     len(db._by_ean),
+        },
+        "rezaw_plast": {
+            "db_loaded":  rp_db.is_loaded,
+            "by_code":    len(rp_db._by_code),
+            "by_ean":     len(rp_db._by_ean),
+        },
     }
 
 
