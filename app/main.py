@@ -14,7 +14,7 @@ from .extractors.pdf_extractor import PDFExtractor
 from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
-from .processors.field_mapper import FieldMapper
+from .processors.field_mapper import FieldMapper, ProductRecord
 from .processors.product_db import get_product_db
 from .output.excel_writer import write_excel
 
@@ -155,6 +155,26 @@ async def extract(
                 enriched += 1
             if enriched:
                 logger.info("Enriched %d records from product DB", enriched)
+
+        # Post-enrichment dedup: two AM codes can resolve to the same internal
+        # product code after DB lookup — keep the record with the most fields.
+        if any(getattr(r, "extraction_method", "") == "osram" for r in records):
+            pre = len(records)
+            seen: dict[str, ProductRecord] = {}
+            deduped: list[ProductRecord] = []
+            for rec in records:
+                key = rec.product_code
+                if not key:
+                    deduped.append(rec)
+                elif key not in seen:
+                    seen[key] = rec
+                    deduped.append(rec)
+                elif rec.filled_count() > seen[key].filled_count():
+                    deduped[deduped.index(seen[key])] = rec
+                    seen[key] = rec
+            records = deduped
+            if len(records) < pre:
+                logger.info("Post-enrichment dedup: %d → %d records", pre, len(records))
 
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
 
