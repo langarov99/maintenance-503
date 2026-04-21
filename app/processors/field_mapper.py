@@ -1095,6 +1095,127 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
 
 
 # ---------------------------------------------------------------------------
+# M-Tech Poland-specific extractor
+# ---------------------------------------------------------------------------
+
+def _is_mtech_document(text: str) -> bool:
+    return bool(re.search(r'm[-\s]?tech', text, re.IGNORECASE))
+
+
+def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
+    """
+    M-Tech Excel invoice: 2 rows per product.
+      Row 1 (bold):   No. | product_code | CN Code | Country | EAN | ... | Weight
+      Row 2 (italic):     | description  |         |         |     | Qty | unit | VAT | Unit price | Total net value
+    Row 1 is identified by a sequential integer in the first (No.) column.
+    """
+    records = []
+    logger.info("M-Tech: %d table(s) received", len(tables))
+
+    for table in tables:
+        if not table or len(table) < 3:
+            continue
+
+        def norm(s):
+            return str(s or "").lower().strip()
+
+        # Find header row: must contain "item description" or "description" + "ean"
+        header_idx = None
+        for i, row in enumerate(table):
+            joined = " ".join(norm(c) for c in row)
+            if ("item description" in joined or
+                    ("description" in joined and ("ean" in joined or "qty" in joined))):
+                header_idx = i
+                break
+        if header_idx is None:
+            logger.warning("M-Tech: no header row found in table (%d rows)", len(table))
+            continue
+
+        headers = [norm(c) for c in table[header_idx]]
+        logger.info("M-Tech header: %s", headers)
+
+        def find_col(kws):
+            for kw in kws:
+                for idx, h in enumerate(headers):
+                    if kw in h:
+                        return idx
+            return None
+
+        no_idx     = find_col(["no.", "no ", "lp.", "pos"]) or 0
+        desc_idx   = find_col(["item description", "description", "item"]) or 1
+        ean_idx    = find_col(["ean", "gtin", "barcode"])
+        qty_idx    = find_col(["qty", "quantity", "ilosc", "ilość"])
+        price_idx  = find_col(["unit price", "unit_price", "cena netto", "price"])
+        total_idx  = find_col(["total net", "total", "wartosc", "wartość netto"])
+        weight_idx = find_col(["weight", "waga"])
+
+        def cell(row, idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        data_rows = table[header_idx + 1:]
+        i = 0
+        while i < len(data_rows):
+            row1 = data_rows[i]
+
+            # Row 1 must have a sequential integer in the No. column
+            no_val = re.sub(r'\.0$', '', cell(row1, no_idx))
+            if not (no_val and no_val.isdigit()):
+                i += 1
+                continue
+
+            code   = cell(row1, desc_idx)
+            ean    = cell(row1, ean_idx) if ean_idx is not None else ""
+            weight = cell(row1, weight_idx) if weight_idx is not None else ""
+
+            # Row 2 holds description, qty and prices
+            row2      = data_rows[i + 1] if i + 1 < len(data_rows) else []
+            desc      = cell(row2, desc_idx)
+            qty_raw   = cell(row2, qty_idx) if qty_idx is not None else ""
+            price_raw = cell(row2, price_idx) if price_idx is not None else ""
+            total_raw = cell(row2, total_idx) if total_idx is not None else ""
+
+            if not code or norm(code) in ("item description", "description", "no.", ""):
+                i += 2
+                continue
+
+            rec = ProductRecord(extraction_method="table")
+            rec.product_code = code
+            rec.product_name = desc or None
+
+            ean_clean = re.sub(r'[^\d]', '', ean)
+            if re.match(r'^\d{8,14}$', ean_clean):
+                rec.ean = ean_clean
+
+            if qty_raw:
+                try:
+                    n = int(float(qty_raw.replace(",", ".")))
+                    rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+                except ValueError:
+                    rec.quantity = qty_raw
+
+            if price_raw:
+                p = re.sub(r'[^\d.,]', '', price_raw).replace(',', '.')
+                if p:
+                    rec.price = p + " EUR"
+
+            if total_raw:
+                t = re.sub(r'[^\d.,]', '', total_raw).replace(',', '.')
+                if t:
+                    rec.total_price = t + " EUR"
+
+            if weight:
+                rec.weight_kg = weight
+
+            records.append(rec)
+            i += 2
+
+    logger.info("M-Tech extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1142,6 +1263,13 @@ class FieldMapper:
             records = extract_maxton_products(tables, text)
             if records:
                 logger.info("Extraction method: Maxton Design (%d records)", len(records))
+                return records
+
+        # Step 0f — M-Tech Poland (explicit selection or auto-detection)
+        if supplier == "mtech" or (supplier == "auto" and _is_mtech_document(text)):
+            records = extract_mtech_products(tables, text)
+            if records:
+                logger.info("Extraction method: M-Tech (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex

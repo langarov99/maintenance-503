@@ -169,6 +169,7 @@
         <div class="supplier-btn" data-supplier="kegel_blazusiak">Kegel-Blazusiak</div>
         <div class="supplier-btn" data-supplier="mafra">Ma*Fra</div>
         <div class="supplier-btn" data-supplier="maxton_design">Maxton Design</div>
+        <div class="supplier-btn" data-supplier="mtech">M-Tech</div>
         <div class="supplier-btn" data-supplier="osram">Osram</div>
         <div class="supplier-btn" data-supplier="petex">Petex</div>
         <div class="supplier-btn" data-supplier="rati">Rati</div>
@@ -268,7 +269,7 @@
   });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'maxton_design', 'osram', 'rezaw_plast']);
+  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {

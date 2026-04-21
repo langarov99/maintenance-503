@@ -367,6 +367,7 @@ class SupplierNameDatabase:
 _mx_db:    Optional[SupplierNameDatabase] = None
 _avisa_db: Optional[SupplierNameDatabase] = None
 _amio_db:  Optional[SupplierNameDatabase] = None
+_mtech_db: Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -391,3 +392,11 @@ def get_amio_db(data_dir: str) -> SupplierNameDatabase:
         _amio_db = SupplierNameDatabase(data_dir, "amio-products.xlsx")
         _amio_db.load()
     return _amio_db
+
+
+def get_mtech_db(data_dir: str) -> SupplierNameDatabase:
+    global _mtech_db
+    if _mtech_db is None:
+        _mtech_db = SupplierNameDatabase(data_dir, "mtech-products.xlsx")
+        _mtech_db.load()
+    return _mtech_db
