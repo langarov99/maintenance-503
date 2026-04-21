@@ -1014,7 +1014,7 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
                 name = (name + " " + next_line).strip()
 
         # Skip rows where description is a column header
-        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?|shipping)\b', name, re.IGNORECASE):
+        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?)\b', name, re.IGNORECASE):
             i += 1
             continue
 
@@ -1044,6 +1044,27 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         seen.add(code)
         records.append(rec)
         i += 1
+
+    # Handle shipping/freight row — no standard XX-XXXX code, price merged in PDF text
+    # e.g. "41 265,000 % 265,001SHIPPING EXPORT+WDT Wysyłka / Shipping DB Schenker"
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not re.search(r'\b(?:shipping|wysyłka|wyslka|freight)\b', line, re.IGNORECASE):
+            continue
+        # Lenient price regex — no word boundaries to handle merged digits
+        prices = list(dict.fromkeys(re.findall(r'(\d{1,6}[.,]\d{2})', line)))
+        if not prices:
+            continue
+        price_val = prices[-1].replace(',', '.') + ' EUR'
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = "SHIPPING"
+        rec.product_name  = "Wysyłka / Shipping"
+        rec.quantity      = "1"
+        rec.price         = price_val
+        rec.total_price   = price_val
+        records.append(rec)
+        logger.info("Maxton: shipping row added — %s", price_val)
+        break
 
     logger.info("Maxton text extraction: %d records", len(records))
     return records
