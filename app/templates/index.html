@@ -194,8 +194,11 @@
               <th>Код на продукта</th>
               <th>Количество</th>
               <th>Ед.</th>
-              <th>Цена (с/без ДДС)</th>
-              <th>Ime на продукта</th>
+              <th>Цена за брой</th>
+              <th>Вал.</th>
+              <th>Обща сума</th>
+              <th>Вал.</th>
+              <th>Име на продукта</th>
               <th>EAN / Баркод</th>
               <th>Кг (бруто/нето)</th>
               <th>Бр. в комплект</th>
@@ -311,20 +314,25 @@
 
   function renderResults(data) {
     resultBody.innerHTML = '';
-    function splitQty(qty) {
-      if (!qty) return ['', ''];
-      const m = qty.match(/^(\d+(?:[.,]\d+)?)\s*([A-Za-z]*)/);
-      return m ? [m[1], m[2].toUpperCase()] : [qty, ''];
+    function splitVal(raw) {
+      if (!raw) return ['', ''];
+      const m = raw.match(/^([\d.,]+)\s*([A-Za-z%]*)/);
+      return m ? [m[1], m[2].toUpperCase()] : [raw, ''];
     }
 
     data.records.forEach((rec, idx) => {
-      const [qNum, qUnit] = splitQty(rec.quantity);
+      const [qNum, qUnit]   = splitVal(rec.quantity);
+      const [pVal, pCur]    = splitVal(rec.price);
+      const [tVal, tCur]    = splitVal(rec.total_price);
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${idx+1}</td>`
         + `<td>${rec.product_code || ''}</td>`
         + `<td>${qNum}</td>`
         + `<td>${qUnit}</td>`
-        + `<td>${rec.price || ''}</td>`
+        + `<td>${pVal}</td>`
+        + `<td>${pCur}</td>`
+        + `<td>${tVal}</td>`
+        + `<td>${tCur}</td>`
         + `<td>${rec.product_name || ''}</td>`
         + `<td>${rec.ean || ''}</td>`
         + `<td>${rec.weight_kg || ''}</td>`
