@@ -978,6 +978,60 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback when pdfplumber finds no tables."""
+    records = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # Find a Maxton product code anywhere on the line
+        m = _MAXTON_CODE_RE.search(line)
+        if not m:
+            # Sometimes description wraps to next line — check if next line has a code
+            i += 1
+            continue
+
+        code = m.group(1)
+        if code in seen:
+            i += 1
+            continue
+
+        # Collect description: text after the code on same line, plus next line if needed
+        after = m.group(2).strip()
+        # Description ends before digits (qty/price at end of line)
+        desc_m = re.match(r'^(.*?)(?:\s+\d+[.,]?\d*\s*(?:szt|kpl)\b.*)?$', after, re.IGNORECASE)
+        name = desc_m.group(1).strip() if desc_m else after
+
+        # If description is short, try appending next line (multi-line descriptions)
+        if len(name) < 10 and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if next_line and not _MAXTON_CODE_RE.search(next_line) and not re.match(r'^\d+\s+[A-Z]{2}-', next_line):
+                name = (name + " " + next_line).strip()
+
+        # Quantity: small integer before "szt" or "kpl"
+        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
+        quantity = qty_m.group(1) if qty_m else None
+
+        # Price: last decimal number on the line (Wartość netto)
+        prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', line)
+        price = prices[-1].replace(',', '.') + ' EUR' if prices else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name[:120] if name else None
+        rec.quantity = quantity
+        rec.price = price
+
+        seen.add(code)
+        records.append(rec)
+        i += 1
+
+    logger.info("Maxton text extraction: %d records", len(records))
+    return records
+
+
 def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Maxton Design: %d table(s) received", len(tables))
     records = []
@@ -987,7 +1041,13 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
             if rec.product_code not in seen_codes:
                 seen_codes.add(rec.product_code)
                 records.append(rec)
-    logger.info("Maxton Design extraction: %d records from %d tables", len(records), len(tables))
+
+    # Fallback to text-based extraction if tables yielded nothing
+    if not records and text:
+        logger.info("Maxton: no table records — trying text extraction")
+        records = _parse_maxton_from_text(text)
+
+    logger.info("Maxton Design extraction: %d records total", len(records))
     return records
 
 
