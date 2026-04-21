@@ -27,8 +27,8 @@ If oFSO.FolderExists(sRoot & "\WinPython") Then
 End If
 
 If sPython = "" Then
-    MsgBox "Python не е намерен в WinPython папката!" & vbCrLf & _
-           "Провери дали WinPython е инсталиран в: " & sRoot, _
+    MsgBox "Python not found in WinPython folder!" & vbCrLf & _
+           "Check if WinPython is installed in: " & sRoot, _
            vbCritical, "Data Extraction Bot"
     WScript.Quit 1
 End If

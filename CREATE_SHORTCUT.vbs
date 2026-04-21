@@ -11,8 +11,8 @@ Set oShortcut = oShell.CreateShortcut(sDesktop & "\Data Extraction Bot.lnk")
 oShortcut.TargetPath       = "wscript.exe"
 oShortcut.Arguments        = """" & sRoot & "\LAUNCH.vbs"""
 oShortcut.WorkingDirectory = sRoot
-oShortcut.IconLocation     = "shell32.dll,14"   ' globe/browser icon
+oShortcut.IconLocation     = "shell32.dll,14"
 oShortcut.Description      = "Data Extraction Bot"
 oShortcut.Save
 
-MsgBox "Иконката е създадена на работния плот!", vbInformation, "Data Extraction Bot"
+MsgBox "Shortcut created on Desktop!", vbInformation, "Data Extraction Bot"
