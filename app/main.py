@@ -18,7 +18,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord
-from .processors.product_db import get_product_db, get_rezaw_plast_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -221,6 +221,22 @@ async def extract(
                 if enriched_rp:
                     logger.info("Rezaw-Plast: enriched %d records from DB", enriched_rp)
 
+        # Enrich records from Maxton Design product database
+        if supplier == "maxton_design":
+            mx_db = get_maxton_db(str(DATA_DIR))
+            if mx_db.is_loaded:
+                enriched_mx = 0
+                for rec in records:
+                    info = mx_db.lookup(rec.product_code)
+                    if not info:
+                        continue
+                    # DB name always takes priority over invoice name
+                    if info.description:
+                        rec.product_name = info.description
+                    enriched_mx += 1
+                if enriched_mx:
+                    logger.info("Maxton: enriched %d records from DB", enriched_mx)
+
         # Post-enrichment dedup: two AM codes can resolve to the same internal
         # product code after DB lookup — keep the record with the most fields.
         if any(getattr(r, "extraction_method", "") == "osram" for r in records):
@@ -286,6 +302,10 @@ async def health():
             "db_loaded":  rp_db.is_loaded,
             "by_code":    len(rp_db._by_code),
             "by_ean":     len(rp_db._by_ean),
+        },
+        "maxton": {
+            "db_loaded": get_maxton_db(str(DATA_DIR)).is_loaded,
+            "by_code":   len(get_maxton_db(str(DATA_DIR))._by_code),
         },
     }
 

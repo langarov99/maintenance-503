@@ -301,3 +301,76 @@ def get_rezaw_plast_db(data_dir: str) -> RezawPlastDatabase:
         _rp_db = RezawPlastDatabase(data_dir)
         _rp_db.load()
     return _rp_db
+
+
+# ---------------------------------------------------------------------------
+# Maxton Design product database
+# ---------------------------------------------------------------------------
+
+class MaxtonDatabase:
+    """
+    File: maxton-products.xlsx
+    Expected columns: Code (product code) | Description (name)
+    Any column order is accepted — detected by header keywords.
+    """
+
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self._by_code: dict[str, ProductInfo] = {}
+        self._loaded = False
+
+    def load(self):
+        path = self.data_dir / "maxton-products.xlsx"
+        if not path.exists():
+            logger.info("Maxton products file not found: %s", path)
+            self._loaded = True
+            return
+        try:
+            df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+            df = df.fillna("")
+            headers = [str(c).lower().strip() for c in df.columns]
+
+            code_idx = ProductDatabase._find_col(
+                headers, ["код", "code", "артикул", "article", "ref"]
+            ) or 0
+            desc_idx = ProductDatabase._find_col(
+                headers, ["описание", "description", "name", "naziv", "naziv", "наименование"]
+            ) or 1
+
+            col_code = df.columns[code_idx]
+            col_desc = df.columns[desc_idx]
+            logger.info("Maxton products — code col:%s  desc col:%s", col_code, col_desc)
+
+            for _, row in df.iterrows():
+                code = str(row[col_code]).strip()
+                desc = str(row[col_desc]).strip()
+                if not code or code.lower() in ("nan", ""):
+                    continue
+                self._by_code[code.upper()] = ProductInfo(
+                    internal_code=code,
+                    description=desc or None,
+                )
+            logger.info("Maxton DB loaded: %d records", len(self._by_code))
+        except Exception as e:
+            logger.error("Failed to load Maxton products: %s", e)
+        self._loaded = True
+
+    def lookup(self, code: str) -> Optional[ProductInfo]:
+        if not code or not self._loaded:
+            return None
+        return self._by_code.get(code.strip().upper())
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded and bool(self._by_code)
+
+
+_mx_db: Optional[MaxtonDatabase] = None
+
+
+def get_maxton_db(data_dir: str) -> MaxtonDatabase:
+    global _mx_db
+    if _mx_db is None:
+        _mx_db = MaxtonDatabase(data_dir)
+        _mx_db.load()
+    return _mx_db
