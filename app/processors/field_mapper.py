@@ -865,6 +865,16 @@ def _is_maxton_document(text: str) -> bool:
     return bool(re.search(r'maxton', text, re.IGNORECASE))
 
 
+_MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
+
+
+def _strip_diacritics(s: str) -> str:
+    for src, dst in [('ą','a'),('ć','c'),('ę','e'),('ł','l'),('ń','n'),
+                     ('ó','o'),('ś','s'),('ź','z'),('ż','z')]:
+        s = s.replace(src, dst).replace(src.upper(), dst.upper())
+    return s
+
+
 def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
     """Parse one PDF table from a Maxton Design invoice.
 
@@ -877,18 +887,27 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
     if not table or len(table) < 2:
         return []
 
-    # Find header row containing description and quantity columns
+    def norm(s):
+        return _strip_diacritics(str(s or "").lower())
+
+    # Find header row: contains "lp" AND ("nazwa" OR "netto")
+    # Also accept row where first cell is "Lp." alone
     header_idx = None
     for i, row in enumerate(table):
-        joined = " ".join(str(c or "").lower() for c in row)
-        if ("nazwa" in joined or "product" in joined) and ("ilość" in joined or "qty" in joined or "ilosc" in joined):
+        joined = " ".join(norm(c) for c in row)
+        first  = norm(row[0]) if row else ""
+        if (first.strip().rstrip('.') == "lp" and "netto" in joined):
+            header_idx = i
+            break
+        if "nazwa" in joined and ("ilosc" in joined or "qty" in joined or "netto" in joined):
             header_idx = i
             break
     if header_idx is None:
+        logger.warning("Maxton: no header row found in table (%d rows)", len(table))
         return []
 
-    headers = [str(c or "").lower().strip() for c in table[header_idx]]
-    logger.info("Maxton: header row at index %d", header_idx)
+    headers = [norm(c) for c in table[header_idx]]
+    logger.info("Maxton: header row at index %d: %s", header_idx, headers)
 
     def find(kws):
         for kw in kws:
@@ -897,15 +916,15 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
                     return i
         return None
 
-    desc_idx = find(["nazwa towaru", "product name", "nazwa", "product"])
-    qty_idx  = find(["ilość", "ilosc", "qty", "quantity"])
-    # Wartość netto EUR = last numeric column (rightmost "wartość" or last column)
-    value_idx = find(["wartość netto", "wartosc netto", "wartość", "value eur", "value"])
+    desc_idx  = find(["nazwa towaru", "product name", "nazwa", "product"])
+    qty_idx   = find(["ilosc", "qty", "quantity"])
+    value_idx = find(["wartosc netto", "value eur", "wartosc", "value"])
     if value_idx is None:
         value_idx = len(headers) - 1  # fallback: last column
 
     if desc_idx is None:
-        return []
+        # Fallback: scan rows directly for Maxton product code pattern
+        desc_idx = 0
 
     records = []
     for row in table[header_idx + 1:]:
@@ -921,13 +940,20 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         if not raw_desc:
             continue
 
-        # Split first token as product code, rest as name
-        parts = raw_desc.split(None, 1)
-        code = parts[0]
-        name = parts[1] if len(parts) > 1 else ""
+        # Try to match Maxton product code pattern directly
+        m = _MAXTON_CODE_RE.match(raw_desc)
+        if m:
+            code = m.group(1)
+            name = m.group(2).strip()
+        else:
+            parts = raw_desc.split(None, 1)
+            code  = parts[0]
+            name  = parts[1].strip() if len(parts) > 1 else ""
 
-        # Skip row-number-only or header-like cells
+        # Skip row numbers, header text, short/invalid codes
         if not code or (code.isdigit() and len(code) <= 3):
+            continue
+        if code.lower() in ("lp.", "lp", "nazwa", "no.", "no"):
             continue
 
         rec = ProductRecord(extraction_method="table")
