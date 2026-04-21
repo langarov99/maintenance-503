@@ -290,8 +290,8 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # Used only for product database lookup — NOT shown as product code
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 
-# Position line anchor: 000020, 001110, 001120 etc. OR 80-002 style (delivery sub-line)
-_POS_RE = re.compile(r'^(0{2,5}\d{1,4}|\d{2,3}-\d{3})\b')
+# Position line anchor: 000020, 001110 etc. OR "80 -001" / "80-002" sub-line style
+_POS_RE = re.compile(r'^(0{2,5}\d{1,4}|\d{2,3}\s*-\s*\d{3})\b')
 
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
@@ -299,8 +299,11 @@ _WEIGHT_TRIPLET_RE = re.compile(
     r'(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})\s*/\s*(\d{1,4}[,.]\d{1,4})'
 )
 
-# Quantity with Bulgarian or EN unit
-_QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
+# Quantity with Bulgarian or EN unit — capped at 5 digits to prevent EAN false matches
+_QTY_RE = re.compile(r'\b(\d{1,5})\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
+
+# OSRAM GS1-128 barcode: 00000 + 13-digit EAN (18 digits total)
+_GS1_BARCODE_RE = re.compile(r'(?<!\d)(0{5})(\d{13})(?!\d)')
 
 # Unit price: "10,77/ 1 PCE"
 _UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
@@ -339,9 +342,15 @@ def _extract_osram_product_code(pos_line: str) -> Optional[str]:
         tok = tokens[i]
         if _OSRAM_SPEC_RE.match(tok):
             break
-        if tok.upper().rstrip('.,') in {'OSRAM', 'LEDVANCE', 'PHILIPS'}:
+        if tok.upper().rstrip('.,') in {'OSRAM', 'LEDVANCE', 'PHILIPS', 'OSRA', 'OSR'}:
             break
         if re.match(r'^\d{1,6}[.,]\d{2}$', tok):
+            break
+        # Break on pure decimal value without unit (e.g. "0,7" "1,1" = wattage/weight)
+        if re.match(r'^\d+[.,]\d+$', tok):
+            break
+        # Break when the same token appears twice in a row (spec repetition: "2FS 2FS")
+        if code_tokens and tok.upper() == code_tokens[-1].upper():
             break
         code_tokens.append(tok)
         i += 1
@@ -448,7 +457,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if not m:
             continue
 
-        before_lines = lines[max(0, i - 15):i]
+        before_lines = lines[max(0, i - 25):i]
         after_lines  = lines[i:min(len(lines), i + 10)]
         ctx_lines    = before_lines + after_lines
         ctx          = "\n".join(ctx_lines)
@@ -459,12 +468,17 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         rec.product_code = None           # set from position line below
         rec._osram_article = osram_article  # type: ignore[attr-defined]
 
-        # EAN is on the same line as the article code in OSRAM invoices.
-        # Search only ±2 lines to avoid picking up EAN from the previous block.
-        ean_narrow = "\n".join(lines[max(0, i - 2):min(len(lines), i + 3)])
+        # EAN: search ±5 lines for 13/14-digit standalone number, OR
+        # GS1-128 18-digit barcode (00000 + 13-digit EAN) on nearby line.
+        ean_narrow = "\n".join(lines[max(0, i - 5):min(len(lines), i + 3)])
         ean_m = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ean_narrow)
         if ean_m:
             rec.ean = ean_m.group(1)
+        else:
+            # GS1-128 format: 00000 + 13-digit EAN = 18 digits
+            gs1_m = _GS1_BARCODE_RE.search(ean_narrow)
+            if gs1_m:
+                rec.ean = gs1_m.group(2)
 
         # ── Product code: "LEDPWL ACC 103 30X1" style — from position line
         for bl in reversed(before_lines):
@@ -485,11 +499,25 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 if len(tokens) >= 2 and re.match(r'^\d+$', tokens[1]):
                     rec.quantity = tokens[1] + " PCE"
                 break
-        # Fallback: search for explicit "N Брой" in before context
+        # Fallback: search for "N Брой" in before context
         if not rec.quantity:
             for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?)\b', "\n".join(before_lines), re.IGNORECASE):
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
+
+        # Fallback: GS1-128 barcode line has standalone qty after 18-digit code
+        # e.g. "000004062172416160 1200 4FS..." → qty = 1200
+        if not rec.quantity:
+            gs1_qty_m = re.search(
+                r'(?<!\d)0{5}\d{13}(?!\d)\s+(\d{1,5})\s', ctx)
+            if gs1_qty_m:
+                rec.quantity = gs1_qty_m.group(1) + " PCE"
+
+        # Final fallback: any "N PCE/STK/Брой" in full context (max 5 digits)
+        if not rec.quantity:
+            qty_m = _QTY_RE.search(ctx)
+            if qty_m:
+                rec.quantity = qty_m.group(1) + " PCE"
 
         # ── Unit price: "10,77/ 1 PCE" — look only AFTER the article line
         # (avoids recycling-fee lines that appear before the article)
@@ -512,10 +540,9 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             gross = wt_m.group(2).replace(",", ".")
             rec.weight_kg = f"{net} / {gross} kg"
 
-        if rec.quantity:
-            records.append(rec)
-        else:
-            logger.warning("OSRAM: dropped %s — no quantity found. Context: %s",
+        records.append(rec)
+        if not rec.quantity:
+            logger.warning("OSRAM: no quantity for %s. Context: %s",
                            osram_article, " | ".join(before_lines[-4:]))
 
     seen: set[str] = set()
