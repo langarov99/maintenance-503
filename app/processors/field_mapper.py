@@ -65,6 +65,16 @@ PARTS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Exact strings that indicate a repeated column-header row masquerading as a data row
+_HEADER_CODE_WORDS = frozenset([
+    "article number", "article no.", "article no", "article",
+    "code", "item code", "item number", "item no.", "item",
+    "artikel", "artikelnummer", "codice",
+    "nr.", "nr", "no.", "number",
+    "référence", "ref",
+    "код", "артикул", "арт",
+])
+
 COLOR_PATTERN = re.compile(
     r'(?:цвят|color|colour|farbe|colore|kolor|barva)\s*[:\-=]?\s*'
     r'([а-яА-Яa-zA-ZäöüÄÖÜßąćęłńóśźżčďěňřšůýžàèéìíòóùúâêîôûæœ][а-яА-Яa-zA-ZäöüÄÖÜßąćęłńóśźżčďěňřšůýžàèéìíòóùúâêîôûæœ\s]{1,30})',
@@ -172,6 +182,15 @@ def extract_from_table(table: list[list]) -> list[ProductRecord]:
                         rec.ean = barcode
         # Skip rows that look like empty or pure-whitespace product codes
         if rec.filled_count() >= 1 and rec.product_code and rec.product_code.strip():
+            # Skip repeated column-header rows (e.g. "article number" appearing as data)
+            if rec.product_code.lower().strip() in _HEADER_CODE_WORDS:
+                continue
+            # Extract leading number from descriptive parts_in_set values
+            # e.g. "3-pcs (1 and 2 row of seats)" → "3"
+            if rec.parts_in_set:
+                pcs_m = re.match(r'^(\d+)', rec.parts_in_set.strip())
+                if pcs_m:
+                    rec.parts_in_set = pcs_m.group(1)
             records.append(rec)
 
     return records
@@ -551,6 +570,7 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
     price_idx = find(["price", "цена", "preis", "net"])
     ean_idx   = find(["ean", "баркод", "barcode", "gtin"])
     years_idx = find(["year", "production", "год"])
+    pcs_idx   = find(["pcs", "pieces", "set", "parts", "бр", "стелки", "количество"])
 
     if art_idx is None:
         return []
@@ -579,19 +599,26 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
         # Product name: description + years for full context
         desc  = cell(desc_idx)
         years = cell(years_idx) if years_idx is not None else ""
-        name_parts = [p for p in [desc, years] if p and p != article]
+        name_parts = [p for p in [desc, years] if p and p.strip() and p.strip() != article]
         if name_parts:
             rec.product_name = " | ".join(name_parts)[:120]
 
         # Price
-        price_raw = cell(price_idx)
+        price_raw = cell(price_idx) if price_idx is not None else ""
         if price_raw and re.match(r'^\d+[.,]\d+$', price_raw):
             rec.price = price_raw.replace(",", ".") + " EUR"
 
         # EAN
-        ean_raw = cell(ean_idx)
+        ean_raw = cell(ean_idx) if ean_idx is not None else ""
         if re.match(r'^\d{8,14}$', ean_raw):
             rec.ean = ean_raw
+
+        # Pieces in set — extract leading number from e.g. "3-pcs (1 and 2 row of seats)"
+        pcs_raw = cell(pcs_idx) if pcs_idx is not None else ""
+        if pcs_raw and pcs_raw.strip():
+            pcs_m = re.match(r'^(\d+)', pcs_raw.strip())
+            if pcs_m:
+                rec.parts_in_set = pcs_m.group(1)
 
         records.append(rec)
 
