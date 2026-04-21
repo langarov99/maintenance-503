@@ -866,6 +866,8 @@ def _is_maxton_document(text: str) -> bool:
 
 
 _MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
+# Same pattern but without ^ anchor — for scanning raw text lines where codes may be preceded by row numbers
+_MAXTON_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}-[A-Z0-9][A-Z0-9\-]{3,})(?!\w)')
 
 
 def _strip_diacritics(s: str) -> str:
@@ -979,17 +981,21 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
 
 
 def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
-    """Text-based fallback when pdfplumber finds no tables."""
+    """Text-based fallback when pdfplumber finds no usable tables."""
     records = []
     seen: set[str] = set()
     lines = text.splitlines()
+
+    # Debug: log first 40 non-empty lines so we can see the PDF structure
+    sample = [l for l in lines if l.strip()][:40]
+    logger.info("Maxton text sample (first 40 lines):\n%s", "\n".join(sample))
+
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        # Find a Maxton product code anywhere on the line
-        m = _MAXTON_CODE_RE.search(line)
+        # Use no-anchor regex — product codes may be preceded by row numbers
+        m = _MAXTON_CODE_TEXT_RE.search(line)
         if not m:
-            # Sometimes description wraps to next line — check if next line has a code
             i += 1
             continue
 
@@ -998,23 +1004,27 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        # Collect description: text after the code on same line, plus next line if needed
-        after = m.group(2).strip()
-        # Description ends before digits (qty/price at end of line)
-        desc_m = re.match(r'^(.*?)(?:\s+\d+[.,]?\d*\s*(?:szt|kpl)\b.*)?$', after, re.IGNORECASE)
-        name = desc_m.group(1).strip() if desc_m else after
+        # Description: everything after the code on the same line
+        after = line[m.end():].strip()
+        # Strip trailing numbers (prices) — keep only the text part
+        name = re.sub(r'\s+\d[\d .,%-]*$', '', after).strip()
 
-        # If description is short, try appending next line (multi-line descriptions)
+        # If description is short, try appending next line
         if len(name) < 10 and i + 1 < len(lines):
             next_line = lines[i + 1].strip()
-            if next_line and not _MAXTON_CODE_RE.search(next_line) and not re.match(r'^\d+\s+[A-Z]{2}-', next_line):
+            if next_line and not _MAXTON_CODE_TEXT_RE.search(next_line):
                 name = (name + " " + next_line).strip()
+
+        # Skip header-like matches (description contains column keywords)
+        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?)\b', name, re.IGNORECASE):
+            i += 1
+            continue
 
         # Quantity: small integer before "szt" or "kpl"
         qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
         quantity = qty_m.group(1) if qty_m else None
 
-        # Price: last decimal number on the line (Wartość netto)
+        # Price: last decimal number on the line (Wartość netto EUR)
         prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', line)
         price = prices[-1].replace(',', '.') + ' EUR' if prices else None
 
