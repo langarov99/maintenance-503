@@ -2351,7 +2351,8 @@ _GZ_CODE_RE = re.compile(r'^\d{4,8}[A-Z]{0,4}$')
 
 
 def _is_gumarny_zubri_document(text: str) -> bool:
-    return bool(re.search(r'gumarny|zubr[ií]', text, re.IGNORECASE))
+    # Match both ASCII "Gumarny Zubri" and Czech "Gumárny Zubří" (á=á, ř=ř, í=í)
+    return bool(re.search(r'gum[aá]rny|zubr[řr][ií]', text, re.IGNORECASE))
 
 
 def _gz_num(raw: str) -> str:
@@ -2581,8 +2582,14 @@ class FieldMapper:
 
         logger.info("Extraction requested: supplier=%s", supplier)
 
+        # Track whether a dedicated supplier extractor was attempted.
+        # When True we never fall back to generic table/regex extraction — that
+        # would produce garbage from preamble / address tables.
+        _specific_tried = False
+
         # Step 0 — OSRAM (explicit selection or auto-detection)
         if supplier == "osram" or (supplier == "auto" and text and _is_osram_document(text)):
+            _specific_tried = True
             if text:
                 records = extract_osram_products(text)
                 if records:
@@ -2591,6 +2598,7 @@ class FieldMapper:
 
         # Step 0b — Rezaw-Plast (explicit selection or auto-detection)
         if supplier == "rezaw_plast" or (supplier == "auto" and _is_rezaw_plast_document(text)):
+            _specific_tried = True
             records = extract_rezaw_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Rezaw-Plast (%d records)", len(records))
@@ -2598,6 +2606,7 @@ class FieldMapper:
 
         # Step 0c — Avisa (explicit selection or auto-detection)
         if supplier == "avisa" or (supplier == "auto" and _is_avisa_document(text)):
+            _specific_tried = True
             records = extract_avisa_products(tables, text)
             if records:
                 logger.info("Extraction method: Avisa (%d records)", len(records))
@@ -2605,6 +2614,7 @@ class FieldMapper:
 
         # Step 0d — Amio (explicit selection or auto-detection)
         if supplier == "amio" or (supplier == "auto" and _is_amio_document(text)):
+            _specific_tried = True
             records = extract_amio_products(tables, text)
             if records:
                 logger.info("Extraction method: Amio (%d records)", len(records))
@@ -2612,6 +2622,7 @@ class FieldMapper:
 
         # Step 0e — Maxton Design (explicit selection or auto-detection)
         if supplier == "maxton_design" or (supplier == "auto" and _is_maxton_document(text)):
+            _specific_tried = True
             records = extract_maxton_products(tables, text)
             if records:
                 logger.info("Extraction method: Maxton Design (%d records)", len(records))
@@ -2619,6 +2630,7 @@ class FieldMapper:
 
         # Step 0f — M-Tech Poland (explicit selection or auto-detection)
         if supplier == "mtech" or (supplier == "auto" and _is_mtech_document(text)):
+            _specific_tried = True
             records = extract_mtech_products(tables, text)
             if records:
                 logger.info("Extraction method: M-Tech (%d records)", len(records))
@@ -2627,6 +2639,7 @@ class FieldMapper:
         # Step 0g — Ma*Fra / Авиатранс (explicit selection or auto-detection)
         text2 = extracted.get("text2", "")
         if supplier == "mafra" or (supplier == "auto" and (_is_mafra_document(text) or _is_mafra_document(text2))):
+            _specific_tried = True
             records = extract_mafra_products(tables, text, text2)
             if records:
                 logger.info("Extraction method: Ma*Fra (%d records)", len(records))
@@ -2634,6 +2647,7 @@ class FieldMapper:
 
         # Step 0h — Amal-Plast (explicit selection or auto-detection)
         if supplier == "amal_plast" or (supplier == "auto" and _is_amal_plast_document(text)):
+            _specific_tried = True
             records = extract_amal_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Amal-Plast (%d records)", len(records))
@@ -2641,6 +2655,7 @@ class FieldMapper:
 
         # Step 0i — Car Passion (explicit selection or auto-detection)
         if supplier == "car_passion" or (supplier == "auto" and _is_car_passion_document(text)):
+            _specific_tried = True
             records = extract_car_passion_products(tables, text)
             if records:
                 logger.info("Extraction method: Car Passion (%d records)", len(records))
@@ -2648,6 +2663,7 @@ class FieldMapper:
 
         # Step 0j — Vinove (explicit selection or auto-detection)
         if supplier == "vinove" or (supplier == "auto" and _is_vinove_document(text)):
+            _specific_tried = True
             records = extract_vinove_products(tables, text)
             if records:
                 logger.info("Extraction method: Vinove (%d records)", len(records))
@@ -2655,12 +2671,18 @@ class FieldMapper:
 
         # Step 0k — Gumarny Zubri (explicit selection or auto-detection)
         if supplier == "gumarny_zubri" or (supplier == "auto" and _is_gumarny_zubri_document(text)):
+            _specific_tried = True
             records = extract_gumarny_zubri_products(tables, text)
             if records:
                 logger.info("Extraction method: Gumarny Zubri (%d records)", len(records))
                 return records
 
-        # For explicitly selected non-OSRAM supplier skip straight to table/regex
+        # If a dedicated extractor was attempted but returned 0, do NOT fall back
+        # to generic table extraction — it would pick up preamble/address rows.
+        if _specific_tried:
+            logger.info("Specific extractor attempted but returned 0 records — skipping generic fallback")
+            return []
+
         # Step 1 — try table extraction (highest confidence)
         records = []
         for table in tables:
