@@ -405,6 +405,7 @@ _mtech_db:        Optional[SupplierNameDatabase] = None
 _mafra_db:        Optional[SupplierNameDatabase] = None
 _amal_plast_db:   Optional[SupplierNameDatabase] = None
 _car_passion_db:  Optional[SupplierNameDatabase] = None
+_vinove_db:       Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -461,3 +462,11 @@ def get_car_passion_db(data_dir: str) -> SupplierNameDatabase:
         _car_passion_db = SupplierNameDatabase(data_dir, "car-passion.xlsx")
         _car_passion_db.load()
     return _car_passion_db
+
+
+def get_vinove_db(data_dir: str) -> SupplierNameDatabase:
+    global _vinove_db
+    if _vinove_db is None:
+        _vinove_db = SupplierNameDatabase(data_dir, "vinove-products.xlsx")
+        _vinove_db.load()
+    return _vinove_db

@@ -1826,6 +1826,222 @@ def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRe
 
 
 # ---------------------------------------------------------------------------
+# Vinove-specific extractor  (invoice layout mirrors Maxton Design)
+# ---------------------------------------------------------------------------
+
+def _is_vinove_document(text: str) -> bool:
+    return bool(re.search(r'vinove', text, re.IGNORECASE))
+
+
+# Vinove codes follow the same XX-XXXX pattern as Maxton Design
+_VINOVE_CODE_RE = re.compile(r'^([A-Z]{2}-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
+_VINOVE_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}-[A-Z0-9][A-Z0-9\-\+]{3,})')
+
+
+def _parse_vinove_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from a Vinove invoice.
+
+    Expected layout (same as Maxton Design):
+      Lp. | Nazwa towaru/usługi | Ilość | J.m. | VAT | Cena netto EUR | Wartość netto EUR
+
+    Product code is the first whitespace-separated token of the description cell.
+    """
+    if not table or len(table) < 2:
+        return []
+
+    def norm(s):
+        return _strip_diacritics(str(s or "").lower())
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(norm(c) for c in row)
+        first  = norm(row[0]) if row else ""
+        if (first.strip().rstrip('.') == "lp" and "netto" in joined):
+            header_idx = i
+            break
+        if "nazwa" in joined and ("ilosc" in joined or "qty" in joined or "netto" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        logger.warning("Vinove: no header row found in table (%d rows)", len(table))
+        return []
+
+    headers = [norm(c) for c in table[header_idx]]
+    logger.info("Vinove: header row at index %d: %s", header_idx, headers)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    desc_idx  = find(["nazwa towaru", "product name", "nazwa", "product"])
+    qty_idx   = find(["ilosc", "qty", "quantity"])
+    value_idx = find(["wartosc netto", "value eur", "wartosc", "value"])
+    if value_idx is None:
+        value_idx = len(headers) - 1
+
+    if desc_idx is None:
+        desc_idx = 0
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        raw_desc = cell(desc_idx)
+        if not raw_desc:
+            continue
+
+        m = _VINOVE_CODE_RE.match(raw_desc)
+        if m:
+            code = m.group(1)
+            name = m.group(2).strip()
+        else:
+            parts = raw_desc.split(None, 1)
+            code  = parts[0]
+            name  = parts[1].strip() if len(parts) > 1 else ""
+
+        if not code or (code.isdigit() and len(code) <= 3):
+            continue
+        if code.lower() in ("lp.", "lp", "nazwa", "no.", "no"):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        if name:
+            rec.product_name = name[:120]
+
+        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        if qty_raw:
+            try:
+                qty_f = float(qty_raw.replace(",", "."))
+                n = int(qty_f) if qty_f == int(qty_f) else qty_f
+                rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+            except ValueError:
+                rec.quantity = qty_raw
+
+        value_raw = cell(value_idx)
+        if value_raw and re.match(r'^\d+[.,]\d+$', value_raw):
+            rec.price = value_raw.replace(",", ".") + " EUR"
+
+        records.append(rec)
+
+    return records
+
+
+def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback for Vinove invoices — same scan logic as Maxton Design."""
+    records = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _VINOVE_CODE_TEXT_RE.search(line)
+        if not m:
+            i += 1
+            continue
+
+        code = m.group(1)
+        if code in seen:
+            i += 1
+            continue
+
+        after = line[m.end():].strip()
+        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\b.*$', '', after, flags=re.IGNORECASE).strip()
+        if not name:
+            name = after
+
+        if i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if (next_line
+                    and not _VINOVE_CODE_TEXT_RE.search(next_line)
+                    and not re.match(r'^\d+\s+[A-Z]{2}-', next_line)
+                    and not re.search(r'\b\d+\s+(?:szt|kpl)\b', next_line, re.IGNORECASE)):
+                name = (name + " " + next_line).strip()
+
+        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?)\b', name, re.IGNORECASE):
+            i += 1
+            continue
+
+        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
+        if qty_m:
+            n = int(qty_m.group(1))
+            quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+        else:
+            quantity = None
+
+        prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', line)
+        if len(prices) >= 2:
+            price       = prices[-2].replace(',', '.') + ' EUR'
+            total_price = prices[-1].replace(',', '.') + ' EUR'
+        elif len(prices) == 1:
+            price       = prices[-1].replace(',', '.') + ' EUR'
+            total_price = None
+        else:
+            price       = None
+            total_price = None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name[:120] if name else None
+        rec.quantity     = quantity
+        rec.price        = price
+        rec.total_price  = total_price
+
+        seen.add(code)
+        records.append(rec)
+        i += 1
+
+    # Shipping row
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not re.search(r'\b(?:shipping|wysyłka|wyslka|freight)\b', line, re.IGNORECASE):
+            continue
+        prices = list(dict.fromkeys(re.findall(r'(\d{1,6}[.,]\d{2})', line)))
+        if not prices:
+            continue
+        price_val = prices[-1].replace(',', '.') + ' EUR'
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = "SHIPPING"
+        rec.product_name  = "Wysyłka / Shipping"
+        rec.quantity      = "1"
+        rec.price         = price_val
+        rec.total_price   = price_val
+        records.append(rec)
+        logger.info("Vinove: shipping row added — %s", price_val)
+        break
+
+    logger.info("Vinove text extraction: %d records", len(records))
+    return records
+
+
+def extract_vinove_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Vinove: %d table(s) received", len(tables))
+    records = []
+    seen_codes: set[str] = set()
+    for table in tables:
+        for rec in _parse_vinove_table(table):
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+
+    if not records and text:
+        logger.info("Vinove: no table records — trying text extraction")
+        records = _parse_vinove_from_text(text)
+
+    logger.info("Vinove extraction: %d records total", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Amal-Plast specific extractor
 # ---------------------------------------------------------------------------
 
@@ -2162,6 +2378,13 @@ class FieldMapper:
             records = extract_car_passion_products(tables, text)
             if records:
                 logger.info("Extraction method: Car Passion (%d records)", len(records))
+                return records
+
+        # Step 0j — Vinove (explicit selection or auto-detection)
+        if supplier == "vinove" or (supplier == "auto" and _is_vinove_document(text)):
+            records = extract_vinove_products(tables, text)
+            if records:
+                logger.info("Extraction method: Vinove (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
