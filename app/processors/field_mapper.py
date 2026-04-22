@@ -1826,76 +1826,114 @@ def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRe
 
 
 # ---------------------------------------------------------------------------
-# Vinove-specific extractor  (invoice layout mirrors Maxton Design)
+# Vinove-specific extractor
 # ---------------------------------------------------------------------------
+#
+# Actual header (bilingual PL/EN):
+#   No. | Items (Nazwa towaru/uslugi) | Quantity (Ilosc) | Unit (Jm) |
+#   Price per unit (Cena) | Amount net (Wart. netto) | VAT% | VAT | Amount (Wart. brutto)
+#
+# Product code is the first whitespace-separated token of the Items cell.
+# Codes follow the pattern: 1-3 letters + 0-4 digits + dash + 2+ digits  (e.g. V22-07)
 
 def _is_vinove_document(text: str) -> bool:
     return bool(re.search(r'vinove', text, re.IGNORECASE))
 
 
-# Vinove codes follow the same XX-XXXX pattern as Maxton Design
-_VINOVE_CODE_RE = re.compile(r'^([A-Z]{2}-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
-_VINOVE_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}-[A-Z0-9][A-Z0-9\-\+]{3,})')
+# Cell-level: code is the FIRST token of description cell  (V22-07 Description...)
+_VINOVE_CODE_RE = re.compile(
+    r'^([A-Z]{1,3}\d{0,4}-[A-Z0-9]{2,}(?:-[A-Z0-9]+)*)\s+(.*)', re.DOTALL)
+# Scan whole text line for a Vinove code
+_VINOVE_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{1,3}\d{1,4}-\d{2,}(?:-\d+)*)')
+# Quick cell match (startswith) used for continuation-table column scan
+_VINOVE_CODE_CELL_RE = re.compile(r'^[A-Z]{1,3}\d{0,4}-\d{2,}')
 
 
 def _parse_vinove_table(table: list[list]) -> list[ProductRecord]:
-    """Parse one PDF table from a Vinove invoice.
-
-    Expected layout (same as Maxton Design):
-      Lp. | Nazwa towaru/usługi | Ilość | J.m. | VAT | Cena netto EUR | Wartość netto EUR
-
-    Product code is the first whitespace-separated token of the description cell.
-    """
     if not table or len(table) < 2:
         return []
 
     def norm(s):
         return _strip_diacritics(str(s or "").lower())
 
+    def cell(row, idx):
+        if idx is None or idx < 0 or idx >= len(row):
+            return ""
+        return str(row[idx] or "").strip()
+
+    # ── Phase 1: locate header row ────────────────────────────────────────────
     header_idx = None
     for i, row in enumerate(table):
         joined = " ".join(norm(c) for c in row)
         first  = norm(row[0]) if row else ""
-        if (first.strip().rstrip('.') == "lp" and "netto" in joined):
+        if first.strip().rstrip('.') == "lp" and "netto" in joined:
             header_idx = i
             break
         if "nazwa" in joined and ("ilosc" in joined or "qty" in joined or "netto" in joined):
             header_idx = i
             break
-    if header_idx is None:
-        logger.warning("Vinove: no header row found in table (%d rows)", len(table))
-        return []
+        # Bilingual headers: "items" + "quantity" / "ilosc"
+        if "items" in joined and ("quantity" in joined or "ilosc" in joined):
+            header_idx = i
+            break
 
-    headers = [norm(c) for c in table[header_idx]]
-    logger.info("Vinove: header row at index %d: %s", header_idx, headers)
+    if header_idx is not None:
+        headers = [norm(c) for c in table[header_idx]]
+        logger.info("Vinove: header row at index %d: %s", header_idx, headers)
 
-    def find(kws):
-        for kw in kws:
-            for i, h in enumerate(headers):
-                if kw in h:
-                    return i
-        return None
+        def find(kws):
+            for kw in kws:
+                for i, h in enumerate(headers):
+                    if kw in h:
+                        return i
+            return None
 
-    desc_idx  = find(["nazwa towaru", "product name", "nazwa", "product"])
-    qty_idx   = find(["ilosc", "qty", "quantity"])
-    value_idx = find(["wartosc netto", "value eur", "wartosc", "value"])
-    if value_idx is None:
-        value_idx = len(headers) - 1
+        desc_idx  = find(["items", "nazwa towaru", "product name", "nazwa", "product"])
+        qty_idx   = find(["ilosc", "qty", "quantity"])
+        unit_idx  = find(["unit\n", "jm", "jednostk"])
+        # Unit price: "price per unit (cena)" — must be found BEFORE "amount net"
+        price_idx = find(["price per unit", "cena netto", "unit price", "cena"])
+        # Net total: "amount net (wart. netto)"
+        value_idx = find(["amount net", "wart. netto", "netto eur", "wartosc netto",
+                          "wartosc", "net value", "value eur"])
+        if value_idx is None:
+            # Last-resort: last column (may be gross total — not ideal but better than nothing)
+            value_idx = len(headers) - 1
+        if desc_idx is None:
+            desc_idx = 0
+        data_start = header_idx + 1
 
-    if desc_idx is None:
-        desc_idx = 0
+    else:
+        # ── Phase 2: continuation table (page 2+) — no header ────────────────
+        logger.info("Vinove: no header in %d-row table — scanning for code column", len(table))
+        ncols = max((len(r) for r in table if r), default=0)
+        if not ncols:
+            return []
+        counts = [0] * ncols
+        for row in table[:min(20, len(table))]:
+            for ci in range(min(len(row), ncols)):
+                if row[ci] and _VINOVE_CODE_CELL_RE.match(str(row[ci]).strip()):
+                    counts[ci] += 1
+        best = max(range(ncols), key=lambda i: counts[i])
+        if counts[best] == 0:
+            logger.info("Vinove: no code pattern in continuation table — skipping")
+            return []
+        desc_idx  = best
+        qty_idx   = best + 1 if best + 1 < ncols else None
+        unit_idx  = best + 2 if best + 2 < ncols else None
+        price_idx = best + 3 if best + 3 < ncols else None
+        value_idx = best + 4 if best + 4 < ncols else None
+        logger.info("Vinove: continuation columns — desc=%d qty=%s unit=%s price=%s value=%s",
+                    desc_idx, qty_idx, unit_idx, price_idx, value_idx)
+        data_start = 0
 
     records = []
-    for row in table[header_idx + 1:]:
+    _SKIP = {"lp.", "lp", "no.", "no", "items", "nazwa", ""}
+    for row in table[data_start:]:
         if not any(str(c or "").strip() for c in row):
             continue
 
-        def cell(idx):
-            if idx is None or idx >= len(row):
-                return ""
-            return str(row[idx] or "").strip()
-
-        raw_desc = cell(desc_idx)
+        raw_desc = cell(row, desc_idx)
         if not raw_desc:
             continue
 
@@ -1908,9 +1946,9 @@ def _parse_vinove_table(table: list[list]) -> list[ProductRecord]:
             code  = parts[0]
             name  = parts[1].strip() if len(parts) > 1 else ""
 
-        if not code or (code.isdigit() and len(code) <= 3):
+        if not code or code.lower() in _SKIP:
             continue
-        if code.lower() in ("lp.", "lp", "nazwa", "no.", "no"):
+        if code.isdigit() and len(code) <= 3:
             continue
 
         rec = ProductRecord(extraction_method="table")
@@ -1918,26 +1956,32 @@ def _parse_vinove_table(table: list[list]) -> list[ProductRecord]:
         if name:
             rec.product_name = name[:120]
 
-        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        qty_raw  = cell(row, qty_idx)  if qty_idx  is not None else ""
+        unit_raw = cell(row, unit_idx) if unit_idx is not None else ""
         if qty_raw:
             try:
                 qty_f = float(qty_raw.replace(",", "."))
                 n = int(qty_f) if qty_f == int(qty_f) else qty_f
-                rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+                rec.quantity = str(n) + (" " + unit_raw.upper() if unit_raw else "")
             except ValueError:
                 rec.quantity = qty_raw
 
-        value_raw = cell(value_idx)
+        price_raw = cell(row, price_idx) if price_idx is not None else ""
+        if price_raw and re.match(r'^\d+[.,]\d+$', price_raw):
+            rec.price = price_raw.replace(",", ".") + " EUR"
+
+        value_raw = cell(row, value_idx) if value_idx is not None else ""
         if value_raw and re.match(r'^\d+[.,]\d+$', value_raw):
-            rec.price = value_raw.replace(",", ".") + " EUR"
+            rec.total_price = value_raw.replace(",", ".") + " EUR"
 
         records.append(rec)
 
+    logger.info("Vinove table: %d records extracted", len(records))
     return records
 
 
 def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
-    """Text-based fallback for Vinove invoices — same scan logic as Maxton Design."""
+    """Text supplement: scan raw PDF text for Vinove codes missed by table parser."""
     records = []
     seen: set[str] = set()
     lines = text.splitlines()
@@ -1955,7 +1999,8 @@ def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
             continue
 
         after = line[m.end():].strip()
-        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\b.*$', '', after, flags=re.IGNORECASE).strip()
+        name = re.sub(r'\s+\d+\s+(?:szt|kpl|pcs|unit)\b.*$', '', after,
+                      flags=re.IGNORECASE).strip()
         if not name:
             name = after
 
@@ -1963,15 +2008,16 @@ def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
             next_line = lines[i + 1].strip()
             if (next_line
                     and not _VINOVE_CODE_TEXT_RE.search(next_line)
-                    and not re.match(r'^\d+\s+[A-Z]{2}-', next_line)
-                    and not re.search(r'\b\d+\s+(?:szt|kpl)\b', next_line, re.IGNORECASE)):
+                    and not re.search(r'\b\d+\s+(?:szt|kpl|unit|pcs)\b', next_line,
+                                      re.IGNORECASE)):
                 name = (name + " " + next_line).strip()
 
-        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?)\b', name, re.IGNORECASE):
+        if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?|items)\b',
+                     name, re.IGNORECASE):
             i += 1
             continue
 
-        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
+        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl|pcs|unit)\b', line, re.IGNORECASE)
         if qty_m:
             n = int(qty_m.group(1))
             quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
@@ -1986,8 +2032,7 @@ def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
             price       = prices[-1].replace(',', '.') + ' EUR'
             total_price = None
         else:
-            price       = None
-            total_price = None
+            price = total_price = None
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
@@ -1999,25 +2044,6 @@ def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
         seen.add(code)
         records.append(rec)
         i += 1
-
-    # Shipping row
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not re.search(r'\b(?:shipping|wysyłka|wyslka|freight)\b', line, re.IGNORECASE):
-            continue
-        prices = list(dict.fromkeys(re.findall(r'(\d{1,6}[.,]\d{2})', line)))
-        if not prices:
-            continue
-        price_val = prices[-1].replace(',', '.') + ' EUR'
-        rec = ProductRecord(extraction_method="table")
-        rec.product_code  = "SHIPPING"
-        rec.product_name  = "Wysyłka / Shipping"
-        rec.quantity      = "1"
-        rec.price         = price_val
-        rec.total_price   = price_val
-        records.append(rec)
-        logger.info("Vinove: shipping row added — %s", price_val)
-        break
 
     logger.info("Vinove text extraction: %d records", len(records))
     return records
@@ -2033,9 +2059,18 @@ def extract_vinove_products(tables: list, text: str = "") -> list[ProductRecord]
                 seen_codes.add(rec.product_code)
                 records.append(rec)
 
-    if not records and text:
-        logger.info("Vinove: no table records — trying text extraction")
-        records = _parse_vinove_from_text(text)
+    # Always supplement with text to catch continuation-page rows that table
+    # missed (e.g. page 2+ tables where pdfplumber finds no header row).
+    if text:
+        text_records = _parse_vinove_from_text(text)
+        added = 0
+        for rec in text_records:
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+                added += 1
+        if added:
+            logger.info("Vinove: text supplement added %d records", added)
 
     logger.info("Vinove extraction: %d records total", len(records))
     return records
