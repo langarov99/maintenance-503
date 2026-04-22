@@ -1694,6 +1694,118 @@ def _parse_car_passion_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+_CP_DEC_RE  = re.compile(r'\b(\d{1,6}[.,]\d{2})\b')
+_CP_SZT_RE  = re.compile(r'\bszt\.?\b', re.IGNORECASE)
+_CP_LP_RE   = re.compile(r'^\d{1,2}\s+')
+# Alphanumeric suffix patterns: M-L, S-M, XL, XXL, PURE S ...
+_CP_SFXRE   = re.compile(r'^([A-Z]{1,3}-[A-Z]{1,3}|[A-Z]{2,3}|S)$')
+_CP_SKIP    = frozenset(["lp.", "lp", "kod", "nazwa", "ilość", "j.m.", "j.m", "vat",
+                          "cena", "wartość", "wartosc", "towaru", "usługi"])
+
+
+def _parse_car_passion_from_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback for Car Passion invoices.
+
+    pdfplumber often fails to detect the product table (returns only a 3-row
+    header table).  This parser scans raw PDF text for lines that contain the
+    unit word 'szt' and at least two decimal prices, then reconstructs:
+      code, description, quantity, unit-price, total-price
+
+    Expected line layout (after row-number stripping):
+      {code} [{suffix}] {description words}  {qty}  szt  {VAT%}  {price}  {total}
+    """
+    records = []
+    seen_codes: set = set()
+    lines = text.splitlines()
+
+    # Log first 30 lines for debugging
+    logger.info("Car Passion text fallback – first 30 lines:\n%s",
+                "\n".join(f"  {i:3d}: {l}" for i, l in enumerate(lines[:30])))
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+
+        # Must contain unit word "szt"
+        if not _CP_SZT_RE.search(line):
+            continue
+
+        # Must have at least 2 decimal prices after szt
+        szt_m = _CP_SZT_RE.search(line)
+        post_szt = line[szt_m.end():]
+        decimals = _CP_DEC_RE.findall(post_szt)
+        if len(decimals) < 1:
+            continue
+
+        # Strip optional leading row number (1-2 digits)
+        cleaned = _CP_LP_RE.sub('', line).strip()
+        tokens = cleaned.split()
+        if not tokens:
+            continue
+
+        # Find position of "szt" in token list
+        szt_idx = next((j for j, t in enumerate(tokens) if _CP_SZT_RE.fullmatch(t)), None)
+        if szt_idx is None or szt_idx < 2:
+            continue
+
+        # Product code = first token; check for two-word codes like "PURE S", "10017 M-L"
+        code = tokens[0]
+        if code.lower() in _CP_SKIP:
+            continue
+        # Skip pure single/double-digit row-number tokens
+        if code.isdigit() and len(code) <= 2:
+            continue
+
+        code_end = 1
+        if szt_idx >= 3 and _CP_SFXRE.match(tokens[1]):
+            code = tokens[0] + " " + tokens[1]
+            code_end = 2
+
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        # Quantity = token immediately before szt
+        qty_str = tokens[szt_idx - 1]
+        try:
+            qty_val = int(float(qty_str.replace(',', '.')))
+        except (ValueError, TypeError):
+            qty_val = None
+
+        # Description = tokens between code and qty
+        desc_tokens = tokens[code_end: szt_idx - 1]
+        desc = " ".join(desc_tokens).strip()
+
+        # If description is missing or too short, look at the PREVIOUS line
+        if len(desc) < 4 and i >= 2:
+            prev = lines[i - 2].strip()
+            if prev and not _CP_SZT_RE.search(prev):
+                desc = (prev + " " + desc).strip()
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+        if desc and len(desc) > 2:
+            rec.product_name = desc[:120]
+        if qty_val is not None:
+            rec.quantity = str(qty_val) + " SZT"
+
+        if decimals:
+            p = _clean_num(decimals[0])
+            if p:
+                rec.price = p + " EUR"
+        if len(decimals) >= 2:
+            t = _clean_num(decimals[-1])
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+        logger.info("Car Passion text: code=%s qty=%s price=%s total=%s",
+                    code, rec.quantity, rec.price, rec.total_price)
+
+    return records
+
+
 def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Car Passion: %d table(s) received", len(tables))
     records = []
@@ -1703,7 +1815,13 @@ def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRe
             if rec.product_code not in seen_codes:
                 seen_codes.add(rec.product_code)
                 records.append(rec)
-    logger.info("Car Passion extraction: %d records total", len(records))
+
+    if not records and text:
+        logger.info("Car Passion: table extraction yielded 0 records, trying text fallback")
+        records = _parse_car_passion_from_text(text)
+        logger.info("Car Passion text fallback: %d records", len(records))
+    else:
+        logger.info("Car Passion extraction: %d records total", len(records))
     return records
 
 
