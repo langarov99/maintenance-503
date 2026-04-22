@@ -1394,21 +1394,33 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
 
         tokens = line.split()
 
-        # Find a Ma*Fra product code in the first 5 tokens
+        # Pass 1: find a Ma*Fra code with letter prefix (with OCR correction)
         code = None
         code_pos = -1
-        for ti, tok in enumerate(tokens[:5]):
+        for ti, tok in enumerate(tokens[:6]):
             fc = _fix_mafra_code(tok)
             if _MAFRA_CODE_RE.match(fc):
                 code = fc
                 code_pos = ti
                 break
 
+        # Pass 2: digit-only token (4 digits) → try H prefix (most common in Ma*Fra)
+        if not code:
+            for ti, tok in enumerate(tokens[:6]):
+                digits = re.sub(r'[^0-9]', '', tok)
+                if len(digits) == 4:
+                    candidate = 'H' + digits
+                    if _MAFRA_CODE_RE.match(candidate):
+                        code = candidate
+                        code_pos = ti
+                        break
+
         if not code or code in seen_codes:
             continue
 
         # Extract all X.XX or X,XX numbers on the line
-        decimals = re.findall(r'\b\d{1,6}[.,]\d{2}\b', line)
+        # Allow leading non-digit chars (OCR sometimes adds '(' before prices)
+        decimals = re.findall(r'(?<!\d)\d{1,6}[.,]\d{2}(?!\d)', line)
         if not decimals:
             continue
 
