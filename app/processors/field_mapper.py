@@ -1580,6 +1580,134 @@ def extract_mafra_products(tables: list, text: str = "", text2: str = "") -> lis
 
 
 # ---------------------------------------------------------------------------
+# Car Passion specific extractor
+# ---------------------------------------------------------------------------
+#
+# Invoice layout (Polish):
+#   Lp. | Kod towaru/usługi | Nazwa towaru/usługi | Ilość | J.m. | VAT |
+#   Cena netto EUR | Wartość netto EUR
+#
+# Product codes: mostly numeric (4-7 digits) or alphanumeric e.g. "PURE S",
+# "10017 M-L", "10017 S-M".  Unit is always "szt".
+
+def _is_car_passion_document(text: str) -> bool:
+    return bool(re.search(r'car.?passion', text, re.IGNORECASE))
+
+
+def _parse_car_passion_table(table: list[list]) -> list[ProductRecord]:
+    if not table or len(table) < 2:
+        return []
+
+    def norm(s):
+        return str(s or "").lower().strip()
+
+    def cell(row, idx):
+        if idx is None or idx < 0 or idx >= len(row):
+            return ""
+        val = str(row[idx] or "").strip()
+        for line in val.split("\n"):
+            if line.strip():
+                return line.strip()
+        return val
+
+    # Find header row: must have "kod" (code) AND "nazwa" (name)
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(norm(c) for c in row)
+        if ("kod" in joined or "code" in joined) and ("nazwa" in joined or "name" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        logger.info("Car Passion: no header row found in %d-row table", len(table))
+        return []
+
+    headers = [norm(c) for c in table[header_idx]]
+    logger.info("Car Passion: header at row %d: %s", header_idx, headers)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    code_idx  = find(["kod towaru", "kod"])
+    desc_idx  = find(["nazwa towaru", "nazwa", "name"])
+    qty_idx   = find(["ilość", "ilosc", "qty", "quantity"])
+    unit_idx  = find(["j.m", "jm", "unit", "jednostk"])
+    price_idx = find(["cena netto", "net price", "cena"])
+    total_idx = find(["wartość netto", "wartosc netto", "wartość", "wartosc", "net value"])
+
+    if code_idx is None:
+        logger.info("Car Passion: code column not found in %s", headers)
+        return []
+
+    records = []
+    _SKIP = {"lp.", "lp", "kod", "code", "nan", ""}
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        code = cell(row, code_idx)
+        if not code or code.lower() in _SKIP:
+            continue
+        # Skip pure row-number cells (1, 2, 3 ...)
+        if code.isdigit() and len(code) <= 2:
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        if desc_idx is not None:
+            desc = cell(row, desc_idx)
+            if desc and len(desc) > 2:
+                rec.product_name = desc[:120]
+
+        unit_raw = cell(row, unit_idx) if unit_idx is not None else ""
+        qty_raw  = cell(row, qty_idx)  if qty_idx  is not None else ""
+        if qty_raw:
+            try:
+                n = int(float(qty_raw.replace(",", ".")))
+                qty_str = str(n)
+            except (ValueError, TypeError):
+                qty_str = qty_raw
+            if unit_raw:
+                rec.quantity = qty_str + " " + unit_raw.upper()
+            else:
+                rec.quantity = qty_str
+
+        price_raw = cell(row, price_idx) if price_idx is not None else ""
+        if price_raw:
+            p = re.sub(r'[^\d.,]', '', price_raw).replace(',', '.')
+            if p:
+                rec.price = p + " EUR"
+
+        total_raw = cell(row, total_idx) if total_idx is not None else ""
+        if total_raw:
+            t = re.sub(r'[^\d.,]', '', total_raw).replace(',', '.')
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    logger.info("Car Passion: %d records extracted", len(records))
+    return records
+
+
+def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Car Passion: %d table(s) received", len(tables))
+    records = []
+    seen_codes: set = set()
+    for table in tables:
+        for rec in _parse_car_passion_table(table):
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+    logger.info("Car Passion extraction: %d records total", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Amal-Plast specific extractor
 # ---------------------------------------------------------------------------
 
@@ -1909,6 +2037,13 @@ class FieldMapper:
             records = extract_amal_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Amal-Plast (%d records)", len(records))
+                return records
+
+        # Step 0i — Car Passion (explicit selection or auto-detection)
+        if supplier == "car_passion" or (supplier == "auto" and _is_car_passion_document(text)):
+            records = extract_car_passion_products(tables, text)
+            if records:
+                logger.info("Extraction method: Car Passion (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex

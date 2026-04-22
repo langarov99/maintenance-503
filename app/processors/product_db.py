@@ -398,12 +398,13 @@ class SupplierNameDatabase:
 
 
 # Singletons — one per supplier
-_mx_db:         Optional[SupplierNameDatabase] = None
-_avisa_db:      Optional[SupplierNameDatabase] = None
-_amio_db:       Optional[SupplierNameDatabase] = None
-_mtech_db:      Optional[SupplierNameDatabase] = None
-_mafra_db:      Optional[SupplierNameDatabase] = None
-_amal_plast_db: Optional[SupplierNameDatabase] = None
+_mx_db:           Optional[SupplierNameDatabase] = None
+_avisa_db:        Optional[SupplierNameDatabase] = None
+_amio_db:         Optional[SupplierNameDatabase] = None
+_mtech_db:        Optional[SupplierNameDatabase] = None
+_mafra_db:        Optional[SupplierNameDatabase] = None
+_amal_plast_db:   Optional[SupplierNameDatabase] = None
+_car_passion_db:  Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -452,3 +453,11 @@ def get_amal_plast_db(data_dir: str) -> SupplierNameDatabase:
         _amal_plast_db = SupplierNameDatabase(data_dir, "amal-plast.xlsx")
         _amal_plast_db.load()
     return _amal_plast_db
+
+
+def get_car_passion_db(data_dir: str) -> SupplierNameDatabase:
+    global _car_passion_db
+    if _car_passion_db is None:
+        _car_passion_db = SupplierNameDatabase(data_dir, "car-passion.xlsx")
+        _car_passion_db.load()
+    return _car_passion_db

@@ -161,6 +161,7 @@
         <div class="supplier-btn" data-supplier="amio">Amio</div>
         <div class="supplier-btn" data-supplier="avisa">Avisa</div>
         <div class="supplier-btn" data-supplier="bosch">Bosch</div>
+        <div class="supplier-btn" data-supplier="car_passion">Car Passion</div>
         <div class="supplier-btn" data-supplier="farad">Farad</div>
         <div class="supplier-btn" data-supplier="frogum">Frogum</div>
         <div class="supplier-btn" data-supplier="gelly_plast">Gelly Plast</div>
@@ -267,7 +268,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
+  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'avisa', 'car_passion', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {
