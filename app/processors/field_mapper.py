@@ -2460,6 +2460,11 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
         price_idx = best + 4 if best + 4 < ncols else None
         unit_idx  = best + 5 if best + 5 < ncols else None
         total_idx = best + 8 if best + 8 < ncols else None
+        # If no numeric columns are reachable (table too narrow) the data is
+        # useless — text extraction will handle these rows.
+        if qty_idx is None and price_idx is None and total_idx is None:
+            logger.info("Gumarny Zubri: continuation table too narrow — skipping, text will cover")
+            return []
         logger.info("Gumarny Zubri: continuation cols — code=%d desc=%s qty=%s "
                     "price=%s unit=%s total=%s",
                     code_idx, desc_idx, qty_idx, price_idx, unit_idx, total_idx)
@@ -2514,10 +2519,11 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
 
 
 def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
-    """Text-based fallback for Gumarny Zubri invoices.
+    """Parse Gumarny Zubri invoice lines from raw text.
 
-    Each product line starts with the item code.  The tax-number column ("47")
-    separates the description from the numeric columns.
+    Line format: {code} {desc...} 47 {qty} {price} {unit} {vat%} {rabat%} {total}
+    The "47" token (CZ tax-category number) is mandatory — lines without it are
+    section headers, addresses, or other preamble content.
     """
     records = []
     seen_codes: set[str] = set()
@@ -2527,27 +2533,39 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
         if not line:
             continue
         tokens = line.split()
-        if not tokens:
+        if len(tokens) < 3:
             continue
         code = tokens[0]
         if not _GZ_CODE_RE.match(code) or code in seen_codes:
             continue
+
+        # Require "47" (Tax No.) — filters out invoice numbers, addresses, etc.
+        if "47" not in tokens:
+            continue
+
         seen_codes.add(code)
+        sep_idx = tokens.index("47")
 
-        # Description ends at the tax-no token ("47") or first decimal number
-        desc_tokens = []
-        for tok in tokens[1:]:
-            if tok == "47" or re.match(r'^\d+[,.]\d+$', tok):
-                break
-            desc_tokens.append(tok)
-        desc = " ".join(desc_tokens).strip()[:120] or None
+        # Description: tokens between code and "47"
+        desc = " ".join(tokens[1:sep_idx]).strip()[:120] or None
 
+        # After "47": qty price unit vat% rabat% total
+        after = tokens[sep_idx + 1:]
+
+        # Quantity: first token after "47" in Czech 3-decimal format (5,000 = 5)
+        qty_str = ""
+        if after and re.match(r'^\d+[,.]\d+$', after[0]):
+            qty_str = _gz_num(after[0])
+
+        # Price/total: 2-decimal comma numbers in document order
         decimals = re.findall(r'\b\d{1,6}[,.]\d{2}\b', line)
 
         rec = ProductRecord(extraction_method="text")
         rec.product_code = code
         rec.product_name = desc
 
+        if qty_str:
+            rec.quantity = qty_str
         if decimals:
             p = _gz_num(decimals[0])
             if p:
