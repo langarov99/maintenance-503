@@ -358,6 +358,36 @@ class SupplierNameDatabase:
             return None
         return self._by_code.get(code.strip().upper())
 
+    def lookup_by_desc_words(self, words: list[str],
+                              min_overlap: int = 2,
+                              min_ratio: float = 0.35) -> Optional[tuple[str, "ProductInfo"]]:
+        """Return (code, info) for the DB entry whose description best matches
+        the given word list.  Uses word-overlap scoring; returns None if no
+        entry clears both min_overlap and min_ratio thresholds.
+        """
+        if not words or not self._loaded:
+            return None
+        query = {w.lower() for w in words if len(w) > 2}
+        if not query:
+            return None
+        best_code, best_score, best_overlap = None, 0.0, 0
+        for code, info in self._by_code.items():
+            if not info.description:
+                continue
+            db_words = {w.lower() for w in info.description.split() if len(w) > 2}
+            if not db_words:
+                continue
+            overlap = len(query & db_words)
+            if overlap < min_overlap:
+                continue
+            score = overlap / max(len(query), len(db_words))
+            if score > best_score:
+                best_score, best_overlap = score, overlap
+                best_code = code
+        if best_code and best_score >= min_ratio:
+            return best_code, self._by_code[best_code]
+        return None
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded and bool(self._by_code)

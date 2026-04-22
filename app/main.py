@@ -246,6 +246,46 @@ async def extract(
                 if enriched_n:
                     logger.info("%s: name DB enriched %d records", supplier, enriched_n)
 
+                # Ma*Fra description-based recovery: scan OCR lines and match
+                # products whose code is unreadable but description is legible.
+                if supplier == "mafra":
+                    import re as _re
+                    seen_codes = {r.product_code for r in records if r.product_code}
+                    added = 0
+                    for ocr_text in (extracted.get("text", ""),
+                                     extracted.get("text2", "")):
+                        for raw_line in ocr_text.splitlines():
+                            line = _re.sub(r'[|\[\](){}]', ' ', raw_line)
+                            # Keep only ASCII-letter words (product name tokens)
+                            words = [w for w in line.split()
+                                     if _re.match(r'^[A-Za-z]{3,}$', w)]
+                            if len(words) < 2:
+                                continue
+                            match = name_db.lookup_by_desc_words(words)
+                            if not match:
+                                continue
+                            code, info = match
+                            if code in seen_codes:
+                                continue
+                            seen_codes.add(code)
+                            from .processors.field_mapper import ProductRecord, _clean_num
+                            rec = ProductRecord(extraction_method="table")
+                            rec.product_code = info.internal_code or code
+                            rec.product_name = info.description
+                            decimals = _re.findall(r'\d{1,6}[.,]\d{2}', line)
+                            if decimals:
+                                t = _clean_num(decimals[-1])
+                                if t:
+                                    rec.total_price = t + " EUR"
+                                if len(decimals) >= 2:
+                                    p = _clean_num(decimals[-2])
+                                    if p and p != t:
+                                        rec.price = p + " EUR"
+                            records.append(rec)
+                            added += 1
+                    if added:
+                        logger.info("mafra: desc-match recovery added %d records", added)
+
         # Post-enrichment dedup: two AM codes can resolve to the same internal
         # product code after DB lookup — keep the record with the most fields.
         if any(getattr(r, "extraction_method", "") == "osram" for r in records):
