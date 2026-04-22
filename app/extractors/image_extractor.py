@@ -103,11 +103,9 @@ def _find_grid_lines(binary_arr, axis: int,
     axis=1 → vertical lines  (high dark-pixel ratio across each column)
     """
     import numpy as np
-    # mean across the OTHER axis gives one value per row/column
     ratios = binary_arr.mean(axis=1 - axis)
     is_line = ratios > min_dark
 
-    # numpy diff to find run starts/ends
     padded = np.concatenate(([False], is_line, [False]))
     changes = np.diff(padded.astype(np.int8))
     starts = np.where(changes == 1)[0]
@@ -121,17 +119,54 @@ def _find_grid_lines(binary_arr, axis: int,
     return lines
 
 
+def _filter_table_lines(lines: list, tolerance_pct: float = 0.35,
+                        min_count: int = 5) -> list:
+    """Keep only the longest run of evenly-spaced lines (= the table body).
+
+    Invoices have a header/footer with irregular spacing; the product table
+    rows are nearly uniform in height.  By finding the run of lines whose
+    gaps cluster tightly around the median, we isolate the table.
+    """
+    if len(lines) < min_count:
+        return lines
+
+    gaps = [lines[i + 1] - lines[i] for i in range(len(lines) - 1)]
+    median_gap = sorted(gaps)[len(gaps) // 2]
+    if median_gap < 10:
+        return lines
+
+    tol = max(6, int(median_gap * tolerance_pct))
+
+    best_start, best_len = 0, 1
+    curr_start, curr_len = 0, 1
+    for i, g in enumerate(gaps):
+        if abs(g - median_gap) <= tol:
+            curr_len += 1
+            if curr_len > best_len:
+                best_start, best_len = curr_start, curr_len
+        else:
+            curr_start = i + 1
+            curr_len = 1
+
+    # +1 because we need the closing line of the last row
+    result = lines[best_start: best_start + best_len + 1]
+    logger.info("Line filter: %d → %d lines (median gap %dpx, tol ±%dpx)",
+                len(lines), len(result), median_gap, tol)
+    return result
+
+
 def _extract_table_cells(img: Image.Image, lang: str) -> list:
-    """Detect invoice table grid via line analysis and OCR cells in one pass.
+    """Detect invoice table grid via line analysis and assign OCR words to cells.
 
-    Strategy:
-      1. High-contrast grayscale → binary array
-      2. Find horizontal grid lines (row separators) and vertical grid lines
-      3. ONE pytesseract.image_to_data() call → word bounding boxes
-      4. Assign each word to its cell by comparing word centre to grid boundaries
-      5. Return list[list[str]] — the cell grid ready for _parse_mafra_table()
-
-    This mirrors how a human reads a table: cell by cell, not line by line.
+    Steps
+    -----
+    1. High-contrast binary array  (numpy)
+    2. Horizontal lines with HIGH threshold (≥50 % dark) — only thick table borders
+    3. Filter to the longest evenly-spaced run  → table body rows only
+    4. Vertical lines detected INSIDE the table area only
+    5. ONE pytesseract.image_to_data() call → word bounding boxes
+    6. Each word assigned to its cell by comparing word centre to grid boundaries
+    7. Return list[list[str]] ready for _parse_mafra_table()
     """
     try:
         import numpy as np
@@ -146,25 +181,34 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         img = img.resize((w * scale, h * scale), Image.LANCZOS)
 
     gray = img.convert("L")
-    hi_contrast = ImageEnhance.Contrast(gray).enhance(3.5)
-    arr = np.array(hi_contrast, dtype=np.float32) / 255.0
+    hi = ImageEnhance.Contrast(gray).enhance(3.5)
+    arr = np.array(hi, dtype=np.float32) / 255.0
     binary = (arr < 0.35).astype(np.float32)   # 1.0 = dark pixel
 
-    # ── 2. Grid line detection ────────────────────────────────────────────────
-    # Horizontal lines: rows where ≥25 % of pixels are dark
-    # Vertical lines:   cols where ≥12 % of pixels are dark (thinner in scan)
-    hlines = _find_grid_lines(binary, axis=0, min_dark=0.25, min_gap=20)
-    vlines = _find_grid_lines(binary, axis=1, min_dark=0.12, min_gap=25)
+    # ── 2. Horizontal lines — high threshold picks only solid table borders ───
+    hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.50, min_gap=20)
+    logger.info("Horizontal lines (raw): %d", len(hlines_all))
 
-    logger.info("Grid detection: %d horizontal lines, %d vertical lines",
-                len(hlines), len(vlines))
+    # ── 3. Keep only the evenly-spaced run = product table rows ──────────────
+    hlines = _filter_table_lines(hlines_all, tolerance_pct=0.40, min_count=5)
 
-    # Need at least a header row + several data rows, and several columns
-    if len(hlines) < 5 or len(vlines) < 4:
-        logger.info("Grid too sparse — falling back to text extraction")
+    if len(hlines) < 5:
+        logger.info("Not enough horizontal lines after filtering (%d) — falling back",
+                    len(hlines))
         return []
 
-    # ── 3. Single OCR pass ────────────────────────────────────────────────────
+    # ── 4. Vertical lines detected only within the table y-range ─────────────
+    y_top    = max(0, hlines[0] - 5)
+    y_bottom = min(binary.shape[0], hlines[-1] + 5)
+    table_strip = binary[y_top:y_bottom, :]
+    vlines = _find_grid_lines(table_strip, axis=1, min_dark=0.25, min_gap=40)
+    logger.info("Vertical lines (table area): %d", len(vlines))
+
+    if len(vlines) < 3:
+        logger.info("Not enough vertical lines (%d) — falling back", len(vlines))
+        return []
+
+    # ── 5. Single OCR pass ────────────────────────────────────────────────────
     ocr_img = ImageEnhance.Contrast(gray).enhance(2.0)
     data = pytesseract.image_to_data(
         ocr_img, lang=lang,
@@ -172,31 +216,25 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         output_type=Output.DICT,
     )
 
-    # ── 4. Assign words to cells ──────────────────────────────────────────────
+    # ── 6. Assign words to cells ──────────────────────────────────────────────
     n_rows = len(hlines) - 1
     n_cols = len(vlines) - 1
     grid = [[[] for _ in range(n_cols)] for _ in range(n_rows)]
 
     for i, word in enumerate(data["text"]):
         word = str(word).strip()
-        if not word:
-            continue
-        conf = int(data["conf"][i])
-        if conf <= 0:
+        if not word or int(data["conf"][i]) <= 0:
             continue
 
-        # Word centre
         wx = data["left"][i] + data["width"][i] // 2
         wy = data["top"][i] + data["height"][i] // 2
 
-        # Binary-search for row
         row_idx = None
         for r in range(n_rows):
             if hlines[r] <= wy < hlines[r + 1]:
                 row_idx = r
                 break
 
-        # Binary-search for column
         col_idx = None
         for c in range(n_cols):
             if vlines[c] <= wx < vlines[c + 1]:
@@ -206,7 +244,7 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         if row_idx is not None and col_idx is not None:
             grid[row_idx][col_idx].append(word)
 
-    # ── 5. Flatten to strings, drop fully empty rows ──────────────────────────
+    # ── 7. Flatten, drop empty rows ───────────────────────────────────────────
     result = []
     for row in grid:
         cells = [" ".join(words).strip() for words in row]
@@ -214,10 +252,8 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
             result.append(cells)
 
     logger.info("Cell grid built: %d rows × %d cols", len(result), n_cols)
-
-    # Log first 5 rows for debugging
-    for ri, row in enumerate(result[:5]):
-        logger.info("  row %d: %s", ri, " | ".join(f'[{c}]' for c in row))
+    for ri, row in enumerate(result[:6]):
+        logger.info("  row %d: %s", ri, " | ".join(f'[{c[:20]}]' for c in row))
 
     return result
 

@@ -1301,18 +1301,36 @@ def _is_mafra_document(text: str) -> bool:
 
 
 def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
-    """Parse a real table extracted from a Ma*Fra PDF."""
+    """Parse a Ma*Fra table (from PDF or grid-based OCR cell extraction).
+
+    Header keywords are matched loosely to survive OCR garbling:
+    "Коло" matches "Код", "Няименование" contains "аим", etc.
+    For code cells, _fix_mafra_code() is applied to handle OCR errors.
+    """
     if not table or len(table) < 2:
         return []
 
-    # Find header row
+    # Find header row — accept OCR variants of the Bulgarian keywords
+    # "коло" = garbled "Код",  "яим"/"аим" = inside garbled "Наименование"
     header_idx = None
     for i, row in enumerate(table):
         joined = " ".join(str(c or "").lower() for c in row)
-        if ("код" in joined or "code" in joined) and ("наим" in joined or "описание" in joined or "description" in joined):
+        has_code = any(kw in joined for kw in ("код", "коло", "code", "кол\"", "no."))
+        has_desc = any(kw in joined for kw in ("наим", "яим", "аим", "описание",
+                                                "description", "стока", "наименован"))
+        if has_code and has_desc:
             header_idx = i
             break
     if header_idx is None:
+        # Fallback: row with most non-empty cells that contains some table keywords
+        for i, row in enumerate(table):
+            joined = " ".join(str(c or "").lower() for c in row)
+            score = sum(kw in joined for kw in ("кол", "цена", "общо", "мярка", "вал"))
+            if score >= 2:
+                header_idx = i
+                break
+    if header_idx is None:
+        logger.info("Ma*Fra table: header row not found")
         return []
 
     headers = [str(c or "").lower().strip() for c in table[header_idx]]
@@ -1325,13 +1343,15 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
                     return i
         return None
 
-    code_idx  = find(["код", "code"])
-    desc_idx  = find(["наим", "описание", "description", "стока"])
-    qty_idx   = find(["кол", "qty", "количество"])
-    price_idx = find(["ед. цена", "ед.цена", "unit price", "цена"])
-    total_idx = find(["общо", "total", "нв"])
+    # "коло" = OCR garbling of "Код"
+    code_idx  = find(["код", "коло", "code"])
+    desc_idx  = find(["наим", "яим", "аим", "описание", "description", "стока"])
+    qty_idx   = find(["кол-во", "кол во", "qty", "количество"])
+    price_idx = find(["ед. цена", "ед.цена", "ед цена", "unit price", "цена"])
+    total_idx = find(["общо", "total", "нв", "o6mo", "обмо"])
 
     if code_idx is None:
+        logger.info("Ma*Fra table: code column not found in headers")
         return []
 
     records = []
@@ -1344,15 +1364,30 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
                 return ""
             return str(row[idx] or "").strip()
 
-        code = cell(code_idx)
-        if not code or not re.match(r'^[A-Z]{1,2}\d{2,5}$', code):
+        raw_code = cell(code_idx)
+        if not raw_code:
             continue
+        # Apply OCR correction to the code cell value
+        code = _fix_mafra_code(raw_code)
+        if not _MAFRA_CODE_RE.match(code):
+            # Try stripping non-alnum noise (Pass 4 equivalent for table cells)
+            cleaned = re.sub(r'[^A-Za-z0-9АаВвСсЕеНнКкМмОоРрТтХхФф#]', '', raw_code)
+            if cleaned:
+                code = _fix_mafra_code(cleaned)
+            if not _MAFRA_CODE_RE.match(code):
+                # Try H + digits fallback
+                digits = re.sub(r'\D', '', raw_code)
+                if re.match(r'^\d{3,5}$', digits):
+                    code = 'H' + digits
+                if not _MAFRA_CODE_RE.match(code):
+                    continue
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
 
         if desc_idx is not None:
-            rec.product_name = cell(desc_idx)[:150] or None
+            desc_val = cell(desc_idx)[:150]
+            rec.product_name = desc_val or None
 
         if qty_idx is not None:
             qty_raw = cell(qty_idx)
