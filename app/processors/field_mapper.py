@@ -73,6 +73,7 @@ _HEADER_CODE_WORDS = frozenset([
     "nr.", "nr", "no.", "number",
     "référence", "ref",
     "код", "артикул", "арт",
+    "kod",
 ])
 
 COLOR_PATTERN = re.compile(
@@ -99,9 +100,10 @@ PRODUCT_NAME_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 
 HEADER_ALIASES = {
-    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence", "article", "number"],
+    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence", "article", "number", "kod"],
     "quantity":     ["кол", "qty", "quantity", "menge", "anzahl", "quantità", "ilość", "množství", "доставено", "delivered", "geliefert", "consegnato", "поръчано", "ordered", "бр"],
     "price":        ["цена", "price", "preis", "prezzo", "cena", "prix", "единична цена", "unit price"],
+    "total_price":  ["wartość", "total value", "net value", "gross value", "gesamtwert", "total price", "total amount", "valore totale"],
     "product_name": ["наименование", "описание", "продукт", "name", "bezeichnung", "nome", "nazwa", "název", "description", "omschrijving", "клиентско", "artikel"],
     "ean":          ["ean", "баркод", "barcode", "gtin", "upc", "ean код"],
     "weight_kg":    ["кг", "kg", "weight", "gewicht", "peso", "waga", "hmotnost", "брутo", "нето", "brutto", "netto", "gross", "net", "тегло"],

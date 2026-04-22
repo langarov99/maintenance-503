@@ -20,7 +20,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -225,13 +225,23 @@ async def extract(
                 if enriched_rp:
                     logger.info("Rezaw-Plast: enriched %d records from DB", enriched_rp)
 
-        # Enrich name from supplier-specific DB (Maxton / Avisa / Amio)
+        # Amal-Plast: invoice uses AP codes, internal system uses SL codes
+        # Convert before DB lookup: AP1101 → SL1101
+        if supplier == "amal_plast":
+            for rec in records:
+                if rec.product_code and rec.product_code.upper().startswith("AP"):
+                    suffix = rec.product_code[2:]
+                    if suffix.isdigit():
+                        rec.product_code = "SL" + suffix
+
+        # Enrich name from supplier-specific DB (Maxton / Avisa / Amio / Amal-Plast)
         _name_db_map = {
             "maxton_design": get_maxton_db,
             "avisa":         get_avisa_db,
             "amio":          get_amio_db,
             "mtech":         get_mtech_db,
             "mafra":         get_mafra_db,
+            "amal_plast":    get_amal_plast_db,
         }
         if supplier in _name_db_map:
             name_db = _name_db_map[supplier](str(DATA_DIR))
@@ -385,6 +395,10 @@ async def health():
         "mafra": {
             "db_loaded": get_mafra_db(str(DATA_DIR)).is_loaded,
             "by_code":   len(get_mafra_db(str(DATA_DIR))._by_code),
+        },
+        "amal_plast": {
+            "db_loaded": get_amal_plast_db(str(DATA_DIR)).is_loaded,
+            "by_code":   len(get_amal_plast_db(str(DATA_DIR))._by_code),
         },
     }
 

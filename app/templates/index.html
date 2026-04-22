@@ -157,6 +157,7 @@
 
       <h2 style="margin-top:24px">2. Доставчик</h2>
       <div class="supplier-grid" id="supplierGrid">
+        <div class="supplier-btn" data-supplier="amal_plast">Amal Plast</div>
         <div class="supplier-btn" data-supplier="amio">Amio</div>
         <div class="supplier-btn" data-supplier="avisa">Avisa</div>
         <div class="supplier-btn" data-supplier="bosch">Bosch</div>
@@ -264,7 +265,7 @@
   setInterval(sendHeartbeat, 10000);
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
+  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {

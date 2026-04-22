@@ -398,11 +398,12 @@ class SupplierNameDatabase:
 
 
 # Singletons — one per supplier
-_mx_db:    Optional[SupplierNameDatabase] = None
-_avisa_db: Optional[SupplierNameDatabase] = None
-_amio_db:  Optional[SupplierNameDatabase] = None
-_mtech_db: Optional[SupplierNameDatabase] = None
-_mafra_db: Optional[SupplierNameDatabase] = None
+_mx_db:         Optional[SupplierNameDatabase] = None
+_avisa_db:      Optional[SupplierNameDatabase] = None
+_amio_db:       Optional[SupplierNameDatabase] = None
+_mtech_db:      Optional[SupplierNameDatabase] = None
+_mafra_db:      Optional[SupplierNameDatabase] = None
+_amal_plast_db: Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -443,3 +444,11 @@ def get_mafra_db(data_dir: str) -> SupplierNameDatabase:
         _mafra_db = SupplierNameDatabase(data_dir, "mafra-products.xlsx")
         _mafra_db.load()
     return _mafra_db
+
+
+def get_amal_plast_db(data_dir: str) -> SupplierNameDatabase:
+    global _amal_plast_db
+    if _amal_plast_db is None:
+        _amal_plast_db = SupplierNameDatabase(data_dir, "amal-plast.xlsx")
+        _amal_plast_db.load()
+    return _amal_plast_db
