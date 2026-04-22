@@ -2371,18 +2371,24 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
         return []
 
     def norm(s):
-        return str(s or "").lower().strip()
+        # Collapse all whitespace (including \n from multi-line header cells)
+        return re.sub(r'\s+', ' ', str(s or "").lower()).strip()
 
     def cell(row, idx):
         if idx is None or idx < 0 or idx >= len(row):
             return ""
-        return str(row[idx] or "").strip()
+        # Normalize multi-line cell content to single line
+        return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
 
     # ── Phase 1: locate header row ────────────────────────────────────────────
     header_idx = None
     for i, row in enumerate(table):
         joined = " ".join(norm(c) for c in row)
         if "item code" in joined and ("quantity" in joined or "total" in joined):
+            header_idx = i
+            break
+        # Fallback: "item" + "name" + "quantity" without requiring "item code"
+        if "item" in joined and "name" in joined and "quantity" in joined:
             header_idx = i
             break
 
@@ -2400,9 +2406,20 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
         code_idx  = find(["item code", "item"])
         desc_idx  = find(["name", "description"])
         qty_idx   = find(["quantity", "qty"])
-        unit_idx  = find(["unit"])
+        # "unit" must not accidentally match "quantity" — check explicitly
+        unit_idx  = find(["unit no", "unit"])
         price_idx = find(["price"])
+        # "total amount" before plain "total" to avoid matching quantity/total confusion
         total_idx = find(["total amount", "total"])
+
+        # If "unit" hit "price" or "total" column (shouldn't happen but guard it)
+        if unit_idx is not None and unit_idx == price_idx:
+            unit_idx = None
+        if unit_idx is not None and unit_idx == total_idx:
+            unit_idx = None
+
+        logger.info("Gumarny Zubri: cols — code=%s desc=%s qty=%s unit=%s price=%s total=%s",
+                    code_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
         data_start = header_idx + 1
 
     else:
