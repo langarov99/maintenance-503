@@ -1404,12 +1404,13 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
                 code_pos = ti
                 break
 
-        # Pass 2: digit-only token (4 digits) → try H prefix (most common in Ma*Fra)
+        # Pass 2: pure-digit token (3-5 digits) → try H prefix (most common in Ma*Fra)
+        # Require the token to consist ONLY of digits to avoid false positives
+        # like "70x90cm" → "7090".
         if not code:
             for ti, tok in enumerate(tokens[:6]):
-                digits = re.sub(r'[^0-9]', '', tok)
-                if len(digits) == 4:
-                    candidate = 'H' + digits
+                if re.match(r'^\d{3,5}$', tok):
+                    candidate = 'H' + tok
                     if _MAFRA_CODE_RE.match(candidate):
                         code = candidate
                         code_pos = ti
