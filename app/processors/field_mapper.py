@@ -1590,21 +1590,39 @@ def _is_amal_plast_document(text: str) -> bool:
     return bool(re.search(r'amal.?plast', text, re.IGNORECASE))
 
 
-def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
-    """Parse one PDF table from an Amal-Plast invoice.
+def _amal_find_ap_column(table: list[list], start_row: int) -> int:
+    """Return the column index that contains the most AP-prefix codes."""
+    ncols = max((len(r) for r in table if r), default=0)
+    if not ncols:
+        return -1
+    counts = [0] * ncols
+    for row in table[start_row: start_row + 15]:
+        for i, cell in enumerate(row[:ncols]):
+            if cell and _AMAL_PLAST_AP_RE.match(str(cell).strip()):
+                counts[i] += 1
+    best = max(range(ncols), key=lambda i: counts[i])
+    return best if counts[best] > 0 else -1
 
-    Dual-language headers: English (CODE, QTY, NET PRICE, NET VALUE) and
-    Polish (Kod, Ilość, Cena netto, Wartość netto).  Product codes in the
-    CODE/Kod column are AP-prefix codes (e.g. AP1101).
+
+def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from an Amal-Plast invoice.
+
+    Column layout (0-indexed):
+      0:Lp  1:Towar/Usługa  2:Kod  3:Jednostka  4:Ilość
+      5:Cena netto  6:VAT  7:Cena brutto  8:Wartość netto  9:Wartość brutto
+
+    Works whether or not pdfplumber includes the header row.
     """
     if not table or len(table) < 2:
         return []
+
+    _UNIT_WORDS = {"kpl", "szt", "pcs", "szt.", "j.m", "unit", "jednostka", "set"}
 
     def norm(s):
         return str(s or "").lower().strip()
 
     def cell_text(row, idx):
-        if idx is None or idx >= len(row):
+        if idx is None or idx < 0 or idx >= len(row):
             return ""
         val = str(row[idx] or "").strip()
         for line in val.split("\n"):
@@ -1612,7 +1630,7 @@ def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
                 return line.strip()
         return val
 
-    # Find header row containing code/kod AND qty/ilość keywords
+    # ── Phase 1: try to find header row ──────────────────────────────────────
     header_idx = None
     for i, row in enumerate(table):
         joined = " ".join(norm(c) for c in row)
@@ -1621,62 +1639,73 @@ def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
             header_idx = i
             break
 
-    if header_idx is None:
-        logger.info("Amal-Plast: no header row found in %d-row table", len(table))
-        return []
+    if header_idx is not None:
+        headers = [norm(c) for c in table[header_idx]]
+        logger.info("Amal-Plast: header at row %d: %s", header_idx, headers)
 
-    headers = [norm(c) for c in table[header_idx]]
-    logger.info("Amal-Plast: header at row %d: %s", header_idx, headers)
+        def find(kws):
+            for kw in kws:
+                for i, h in enumerate(headers):
+                    if kw in h:
+                        return i
+            return None
 
-    def find(kws):
-        for kw in kws:
-            for i, h in enumerate(headers):
-                if kw in h:
-                    return i
-        return None
+        code_idx  = find(["code", "kod"])
+        qty_idx   = find(["ilo", "qty", "quantity"])
+        unit_idx  = find(["jednostk", "unit", "j.m"])
+        price_idx = find(["cena netto", "net price", "netto"])
+        total_idx = find(["warto", "net value", "wartosc"])
+        desc_idx  = find(["product", "towar", "service", "nazwa"])
+        data_start = header_idx + 1
 
-    code_idx  = find(["code", "kod"])
-    qty_idx   = find(["ilo", "qty", "quantity"])
-    price_idx = find(["cena netto", "net price", "cena"])
-    total_idx = find(["warto", "net value", "wartosc"])
-    desc_idx  = find(["product", "towar", "service", "nazwa"])
+    else:
+        # ── Phase 2: no header — detect columns from data ────────────────────
+        logger.info("Amal-Plast: no header in %d-row table, scanning for AP codes", len(table))
+        code_idx = _amal_find_ap_column(table, 0)
+        if code_idx < 0:
+            logger.info("Amal-Plast: no AP codes found, skipping table")
+            return []
+        logger.info("Amal-Plast: AP code column detected at index %d", code_idx)
+        # Relative layout: code  unit  qty  net_price  VAT  gross_price  net_total  gross_total
+        unit_idx  = code_idx + 1
+        qty_idx   = code_idx + 2
+        price_idx = code_idx + 3
+        # skip VAT column (+4)
+        total_idx = code_idx + 6   # Wartość netto
+        desc_idx  = code_idx - 1 if code_idx > 0 else None
+        data_start = 0
 
-    if code_idx is None:
-        logger.info("Amal-Plast: CODE column not found in %s", headers)
-        return []
-
-    # Validate code column: sample first few data rows to confirm AP codes.
-    # If the detected column gives unit-like values ("kpl", "szt"), shift.
-    _UNIT_WORDS = {"kpl", "szt", "pcs", "szt.", "j.m", "unit", "jednostka"}
-
-    def _sample(col):
-        for row in table[header_idx + 1: header_idx + 5]:
+    # Validate / auto-correct code_idx by sampling
+    def _sample_ap(col):
+        for row in table[data_start: data_start + 5]:
             v = cell_text(row, col)
-            if v and v.lower() not in ("kod", "code", "nan", "") and not v.lower() in _UNIT_WORDS:
+            if v and v.lower() not in ("kod", "code", "nan", "") \
+                    and v.lower() not in _UNIT_WORDS:
                 return v
         return ""
 
-    sample = _sample(code_idx)
+    sample = _sample_ap(code_idx)
     if sample and not _AMAL_PLAST_AP_RE.match(sample):
         for candidate in [code_idx - 1, code_idx + 1, code_idx + 2]:
-            if 0 <= candidate < len(headers):
-                s = _sample(candidate)
-                if s and _AMAL_PLAST_AP_RE.match(s):
-                    logger.info("Amal-Plast: code_idx corrected %d→%d (was %r, now %r)",
-                                code_idx, candidate, sample, s)
-                    code_idx = candidate
-                    break
+            s = _sample_ap(candidate)
+            if s and _AMAL_PLAST_AP_RE.match(s):
+                logger.info("Amal-Plast: code_idx corrected %d→%d (%r→%r)",
+                            code_idx, candidate, sample, s)
+                code_idx = candidate
+                break
 
     records = []
-    for row in table[header_idx + 1:]:
+    for row in table[data_start:]:
         if not any(str(c or "").strip() for c in row):
             continue
 
         code = cell_text(row, code_idx)
-
-        if not code or code.lower() in ("kod", "code", "nan", "") or code.lower() in _UNIT_WORDS:
+        if not code or code.lower() in ("kod", "code", "nan", "") \
+                or code.lower() in _UNIT_WORDS:
             continue
         if code.isdigit() and len(code) <= 3:
+            continue
+        if not _AMAL_PLAST_AP_RE.match(code):
             continue
 
         rec = ProductRecord(extraction_method="table")
@@ -1687,13 +1716,19 @@ def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
             if desc and len(desc) > 3 and not re.match(r'^\d+$', desc):
                 rec.product_name = desc[:120]
 
-        qty_raw = cell_text(row, qty_idx) if qty_idx is not None else ""
+        unit_raw = cell_text(row, unit_idx) if unit_idx is not None else ""
+        qty_raw  = cell_text(row, qty_idx)  if qty_idx  is not None else ""
         if qty_raw:
             try:
                 n = int(float(qty_raw.replace(",", ".")))
-                rec.quantity = str(n)
+                qty_str = str(n)
             except (ValueError, TypeError):
-                rec.quantity = qty_raw
+                qty_str = qty_raw
+            # Append unit (Jednostka) so it appears in the QUANTITY column
+            if unit_raw and unit_raw.lower() in _UNIT_WORDS:
+                rec.quantity = qty_str + " " + unit_raw.upper()
+            else:
+                rec.quantity = qty_str
 
         price_raw = cell_text(row, price_idx) if price_idx is not None else ""
         if price_raw:
@@ -1709,7 +1744,83 @@ def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
 
         records.append(rec)
 
-    logger.info("Amal-Plast: %d records from %d table rows", len(records), len(table) - header_idx - 1)
+    logger.info("Amal-Plast table: %d records extracted", len(records))
+    return records
+
+
+_AMAL_DEC_RE   = re.compile(r'\b(\d{1,6}[.,]\d{2})\b')
+_AMAL_UNIT_RE  = re.compile(r'\b(kpl|szt\.?|pcs|set)\b', re.IGNORECASE)
+_AMAL_ROW_RE   = re.compile(r'^\d+\s+')
+
+
+def _parse_amal_plast_from_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback: scan raw PDF text lines for AP codes.
+
+    Expected line layout (pdfplumber text output):
+      {lp}  {description}  {AP_code}  {unit}  {qty}  {cena_netto}  {VAT}
+      {cena_brutto}  {wartość_netto}  {wartość_brutto}
+    """
+    records = []
+    seen_codes: set = set()
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        ap_matches = list(re.finditer(r'\b(AP\d{4,})\b', line, re.IGNORECASE))
+        if not ap_matches:
+            continue
+
+        # Use last AP code occurrence (code column, not description column)
+        m = ap_matches[-1]
+        code = m.group(1).upper()
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+
+        # Description: text before the first AP occurrence minus leading row number
+        pre = line[:ap_matches[0].start()].strip()
+        pre = _AMAL_ROW_RE.sub('', pre).strip()
+        if pre and len(pre) > 3:
+            rec.product_name = pre[:120]
+
+        # Analyse text AFTER the last AP code
+        post = line[m.end():].strip()
+
+        unit_m = _AMAL_UNIT_RE.search(post)
+        unit_str = ""
+        if unit_m:
+            unit_str = unit_m.group(1).upper()
+            after_unit = post[unit_m.end():].strip()
+            qty_m = re.match(r'(\d+)\b', after_unit)
+            if qty_m:
+                rec.quantity = qty_m.group(1) + " " + unit_str
+
+        # Decimal numbers after AP code: cena_netto  (VAT)  cena_brutto
+        # wartość_netto  wartość_brutto
+        decimals = _AMAL_DEC_RE.findall(post)
+        if decimals:
+            p = _clean_num(decimals[0])
+            if p:
+                rec.price = p + " EUR"
+        if len(decimals) >= 3:
+            # wartość netto is 3rd decimal (VAT is not decimal, so offset is 0)
+            t = _clean_num(decimals[2])
+            if t:
+                rec.total_price = t + " EUR"
+        elif len(decimals) == 2:
+            t = _clean_num(decimals[1])
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+        logger.info("Amal-Plast text: %s qty=%s price=%s total=%s",
+                    code, rec.quantity, rec.price, rec.total_price)
+
     return records
 
 
@@ -1718,7 +1829,13 @@ def extract_amal_plast_products(tables: list, text: str = "") -> list[ProductRec
     records = []
     for table in tables:
         records.extend(_parse_amal_plast_table(table))
-    logger.info("Amal-Plast extraction: %d records total", len(records))
+
+    if not records and text:
+        logger.info("Amal-Plast: table extraction yielded 0 records, trying text fallback")
+        records = _parse_amal_plast_from_text(text)
+        logger.info("Amal-Plast text fallback: %d records", len(records))
+    else:
+        logger.info("Amal-Plast extraction: %d records total", len(records))
     return records
 
 
