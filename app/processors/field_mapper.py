@@ -1277,9 +1277,19 @@ _OCR_FIX = str.maketrans({
     'Т': 'T', 'Х': 'X', 'Ф': 'F', '#': 'H',
 })
 
+# Applied only to the digit portion of a code (after the 1-2 letter prefix)
+_DIGIT_FIX = str.maketrans({'O': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'G': '6', 'B': '8', '+': '4'})
+
 
 def _fix_mafra_code(s: str) -> str:
-    return s.upper().translate(_OCR_FIX)
+    s = s.upper().translate(_OCR_FIX)
+    # Apply digit-lookalike fixes from position 1 onward.
+    # Single-letter prefix (A, H, P, M...) is the common case; applying digit
+    # fixes from char 1 handles "AO193" → "A0193" without breaking "MF66"
+    # because 'F' is not in _DIGIT_FIX.
+    if len(s) >= 2:
+        s = s[0] + s[1:].translate(_DIGIT_FIX)
+    return s
 
 
 def _is_mafra_code(token: str) -> bool:
@@ -1427,6 +1437,18 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
                         code_pos = ti
                         break
 
+        # Pass 4: strip non-alphanumeric noise characters from token and retry
+        # Catches cases like "P0+94" ('+' misread from '4'), "A.0521", "H|0050"
+        if not code:
+            for ti, tok in enumerate(tokens[:6]):
+                cleaned = re.sub(r'[^A-Za-z0-9АаВвСсЕеНнКкМмОоРрТтХхФф#]', '', tok)
+                if cleaned and cleaned != tok and len(cleaned) >= 3:
+                    fc = _fix_mafra_code(cleaned)
+                    if _MAFRA_CODE_RE.match(fc):
+                        code = fc
+                        code_pos = ti
+                        break
+
         if not code or code in seen_codes:
             continue
 
@@ -1472,12 +1494,23 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
             if p:
                 rec.price = p + " EUR"
 
+        # Quantity: a standalone integer after the code position (e.g. "H0050 ... 12 ...")
+        # Look for the first 1-3 digit standalone integer after code_pos
+        qty_tokens = tokens[code_pos + 1:code_pos + 8] if code_pos >= 0 else tokens[1:8]
+        for qt in qty_tokens:
+            qt_clean = re.sub(r'[^\d]', '', qt)
+            if qt_clean and re.match(r'^\d{1,3}$', qt_clean) and not re.search(r'[.,]\d{2}', qt):
+                n = int(qt_clean)
+                if 1 <= n <= 9999:
+                    rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+                    break
+
         records.append(rec)
 
     return records
 
 
-def extract_mafra_products(tables: list, text: str = "") -> list[ProductRecord]:
+def extract_mafra_products(tables: list, text: str = "", text2: str = "") -> list[ProductRecord]:
     logger.info("Ma*Fra: %d table(s) received", len(tables))
 
     # Try table extraction first (real PDF tables)
@@ -1489,10 +1522,23 @@ def extract_mafra_products(tables: list, text: str = "") -> list[ProductRecord]:
         logger.info("Ma*Fra: %d records from table(s)", len(records))
         return records
 
-    # Fallback: parse OCR text
+    # Fallback: parse OCR text — merge results from both preprocessing passes
     logger.info("Ma*Fra: no table records — trying text extraction")
     records = _parse_mafra_from_text(text)
-    logger.info("Ma*Fra text extraction: %d records", len(records))
+
+    if text2:
+        records2 = _parse_mafra_from_text(text2)
+        seen = {r.product_code for r in records}
+        added = 0
+        for rec in records2:
+            if rec.product_code not in seen:
+                records.append(rec)
+                seen.add(rec.product_code)
+                added += 1
+        if added:
+            logger.info("Ma*Fra dual-pass: added %d new records from pass B", added)
+
+    logger.info("Ma*Fra text extraction: %d records total", len(records))
     return records
 
 
@@ -1554,8 +1600,9 @@ class FieldMapper:
                 return records
 
         # Step 0g — Ma*Fra / Авиатранс (explicit selection or auto-detection)
-        if supplier == "mafra" or (supplier == "auto" and _is_mafra_document(text)):
-            records = extract_mafra_products(tables, text)
+        text2 = extracted.get("text2", "")
+        if supplier == "mafra" or (supplier == "auto" and (_is_mafra_document(text) or _is_mafra_document(text2))):
+            records = extract_mafra_products(tables, text, text2)
             if records:
                 logger.info("Extraction method: Ma*Fra (%d records)", len(records))
                 return records

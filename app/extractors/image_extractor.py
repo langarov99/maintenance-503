@@ -61,6 +61,40 @@ def _preprocess(img: Image.Image) -> Image.Image:
     return img
 
 
+def _otsu_threshold(img: Image.Image) -> int:
+    """Compute Otsu's optimal binarization threshold from image histogram."""
+    hist = img.histogram()
+    total = sum(hist)
+    sum_total = sum(i * h for i, h in enumerate(hist))
+    best_t, best_var, sum_b, weight_b = 0, 0.0, 0, 0
+    for t in range(256):
+        weight_b += hist[t]
+        if weight_b == 0 or weight_b == total:
+            continue
+        weight_f = total - weight_b
+        sum_b += t * hist[t]
+        mean_b = sum_b / weight_b
+        mean_f = (sum_total - sum_b) / weight_f
+        var = weight_b * weight_f * (mean_b - mean_f) ** 2
+        if var > best_var:
+            best_var, best_t = var, t
+    return best_t
+
+
+def _preprocess_binary(img: Image.Image) -> Image.Image:
+    """Hard Otsu binarization — better for dense table grids and faint ink."""
+    w, h = img.size
+    if w < 2000:
+        scale = max(2, 2400 // max(w, 1))
+        img = img.resize((w * scale, h * scale), Image.LANCZOS)
+    img = img.convert("L")
+    img = ImageEnhance.Contrast(img).enhance(2.5)
+    t = _otsu_threshold(img)
+    # Clamp: never go below 100 or above 200 to avoid all-black/all-white
+    t = max(100, min(200, t))
+    return img.point(lambda p: 255 if p > t else 0, 'L')
+
+
 def _extract_structured_text(img: Image.Image, lang: str) -> str:
     """Use word bounding boxes to reconstruct properly aligned text lines.
 
@@ -129,13 +163,25 @@ class ImageExtractor:
 
     def extract_from_pil(self, img: Image.Image) -> dict:
         try:
-            img = _preprocess(img)
-            # PSM 4: single column layout — keeps code+price on same line better
-            text = pytesseract.image_to_string(img, lang=self.lang_str,
-                                               config="--psm 4 --oem 3")
-            lines = [l for l in text.splitlines() if l.strip()]
-            logger.info("OCR: %d lines extracted", len(lines))
-            return {"text": "\n".join(lines), "tables": [], "source": "ocr"}
+            # Pass A: soft contrast + PSM 4 (single column — code+price stay on same line)
+            img_a = _preprocess(img)
+            text_a = pytesseract.image_to_string(img_a, lang=self.lang_str,
+                                                 config="--psm 4 --oem 3")
+            lines_a = [l for l in text_a.splitlines() if l.strip()]
+
+            # Pass B: hard Otsu binarization + PSM 6 (uniform block — catches faint rows)
+            img_b = _preprocess_binary(img)
+            text_b = pytesseract.image_to_string(img_b, lang=self.lang_str,
+                                                 config="--psm 6 --oem 3")
+            lines_b = [l for l in text_b.splitlines() if l.strip()]
+
+            logger.info("OCR dual-pass: A=%d lines, B=%d lines", len(lines_a), len(lines_b))
+            return {
+                "text":  "\n".join(lines_a),
+                "text2": "\n".join(lines_b),
+                "tables": [],
+                "source": "ocr_dual",
+            }
         except Exception as e:
             logger.error("OCR failed: %s", e)
-            return {"text": "", "tables": [], "source": "ocr_error"}
+            return {"text": "", "text2": "", "tables": [], "source": "ocr_error"}
