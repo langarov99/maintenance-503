@@ -64,10 +64,9 @@ if static_path.exists():
 
 # ── Heartbeat-based auto-shutdown ────────────────────────────────────────────
 # JS sends POST /heartbeat every 10s while the page is open.
-# If no heartbeat arrives for 120s, the server shuts down automatically.
-# Timeout is intentionally long to survive first-time model downloads (easyocr).
+# If no heartbeat arrives for 30s, the server shuts down automatically.
 _last_heartbeat: float = time.time()
-_HEARTBEAT_TIMEOUT = 120  # seconds
+_HEARTBEAT_TIMEOUT = 30  # seconds
 
 
 def _heartbeat_monitor():
