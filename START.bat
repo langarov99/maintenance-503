@@ -45,24 +45,13 @@ echo.
 echo  ================================================
 echo   Data Extraction Bot  -  http://localhost:5000
 echo  ================================================
-echo   Zatvorete prozoreca "Bot Server" za da spirete.
+echo   Zatvorete tozi prozorec za da spirete bota.
 echo.
 
-:: Start server in a separate minimized window
-start "Bot Server" /min "%COMSPEC%" /k "%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 5000 --app-dir "%ROOT%"
+:: Open browser in background: polls every 0.5s until server responds (max 20s)
+start /b "" "%PYTHON%" -c "exec('import urllib.request,time,webbrowser\nfor _ in range(40):\n  time.sleep(0.5)\n  try:\n    urllib.request.urlopen(\'http://127.0.0.1:5000/\',timeout=1)\n    webbrowser.open(\'http://localhost:5000\')\n    break\n  except: pass')"
 
-:: Wait until server responds (max ~15s, checks every 0.5s)
-echo Izchakване na sarvara...
-:wait_loop
-timeout /t 1 /nobreak > nul
-"%PYTHON%" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/', timeout=1)" 2>nul
-if errorlevel 1 goto wait_loop
+:: Start server in this window (foreground — log visible here)
+"%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 5000 --app-dir "%ROOT%"
 
-:: Server is ready — open browser
-echo [OK] Sarvarot e gotov!
-start "" "http://localhost:5000"
-
-echo.
-echo   Brauzyrat e otvoren. Zatvorete "Bot Server" za da spirete bota.
-echo.
 pause
