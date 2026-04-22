@@ -1258,6 +1258,198 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Ma*Fra (Aviатранс / pochisti.bg) extractor
+# ---------------------------------------------------------------------------
+#
+# Invoice structure (image/scan → OCR text):
+#   No | Код | Наименование | Кол-во | Марка | Ед. цена | Вал. | ТО | Общо в НВ
+#
+# Product codes: 1-2 capital letters + 2-5 digits  (A0521, H0050, MF66, P0494)
+# Unit: always "бр" — translate to Брой/Броя
+# Currency: EUR
+
+_MAFRA_CODE_RE = re.compile(r'^([A-Z]{1,2}\d{2,5})$')
+
+# Tail pattern: qty  бр  unit_price  EUR  [ТО]  total
+# OCR may write "бр" as "6p" or "бр" — match both
+_MAFRA_TAIL_RE = re.compile(
+    r'(\d+)\s+'
+    r'(?:бр|6p|бр\.)\s+'
+    r'(\d+[.,]\d+)\s+'
+    r'EUR\s*'
+    r'(?:\S+\s+)?'          # optional ТО column
+    r'(\d[\d\s]*[.,]\d+)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _is_mafra_document(text: str) -> bool:
+    return bool(re.search(r'pochisti|авиатранс|mafra', text, re.IGNORECASE))
+
+
+def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
+    """Parse a real table extracted from a Ma*Fra PDF."""
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if ("код" in joined or "code" in joined) and ("наим" in joined or "описание" in joined or "description" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    logger.info("Ma*Fra table: header at row %d: %s", header_idx, headers)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    code_idx  = find(["код", "code"])
+    desc_idx  = find(["наим", "описание", "description", "стока"])
+    qty_idx   = find(["кол", "qty", "количество"])
+    price_idx = find(["ед. цена", "ед.цена", "unit price", "цена"])
+    total_idx = find(["общо", "total", "нв"])
+
+    if code_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(idx):
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        code = cell(code_idx)
+        if not code or not re.match(r'^[A-Z]{1,2}\d{2,5}$', code):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        if desc_idx is not None:
+            rec.product_name = cell(desc_idx)[:150] or None
+
+        if qty_idx is not None:
+            qty_raw = cell(qty_idx)
+            try:
+                n = int(float(qty_raw.replace(",", ".")))
+                rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+            except ValueError:
+                rec.quantity = qty_raw or None
+
+        if price_idx is not None:
+            price_raw = cell(price_idx)
+            p = _clean_num(price_raw)
+            if p:
+                rec.price = p + " EUR"
+
+        if total_idx is not None:
+            total_raw = cell(total_idx)
+            t = _clean_num(total_raw)
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    return records
+
+
+def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
+    """Parse Ma*Fra invoice from OCR text (image/scanned PDF).
+
+    Each product line from OCR looks like:
+      1 A0521 PANNO MARTINA 2.0 6 packs of 1 towel 6 бр 4.89 EUR 29.35
+    Strategy: find lines where token 2 matches the product code pattern,
+    then parse the tail (qty бр price EUR total) from the right.
+    """
+    records = []
+    lines = text.splitlines()
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+
+        tokens = line.split()
+        if len(tokens) < 5:
+            continue
+
+        # First token must be a row number; second must be a Ma*Fra code
+        if not tokens[0].isdigit():
+            continue
+        if not _MAFRA_CODE_RE.match(tokens[1]):
+            continue
+
+        code = tokens[1]
+
+        # Try to parse tail: qty бр price EUR [TO] total
+        tail_m = _MAFRA_TAIL_RE.search(line)
+        if not tail_m:
+            continue
+
+        qty_raw   = tail_m.group(1)
+        price_raw = tail_m.group(2)
+        total_raw = tail_m.group(3).replace(" ", "")
+
+        # Description = everything between code and tail match
+        tail_start = tail_m.start()
+        desc_part = line[len(tokens[0]) + 1 + len(code) + 1: tail_start].strip()
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = desc_part[:150] if desc_part else None
+
+        try:
+            n = int(qty_raw)
+            rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+        except ValueError:
+            rec.quantity = qty_raw
+
+        p = _clean_num(price_raw)
+        if p:
+            rec.price = p + " EUR"
+
+        t = _clean_num(total_raw)
+        if t:
+            rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    return records
+
+
+def extract_mafra_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Ma*Fra: %d table(s) received", len(tables))
+
+    # Try table extraction first (real PDF tables)
+    records = []
+    for table in tables:
+        records.extend(_parse_mafra_table(table))
+
+    if records:
+        logger.info("Ma*Fra: %d records from table(s)", len(records))
+        return records
+
+    # Fallback: parse OCR text
+    logger.info("Ma*Fra: no table records — trying text extraction")
+    records = _parse_mafra_from_text(text)
+    logger.info("Ma*Fra text extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1312,6 +1504,13 @@ class FieldMapper:
             records = extract_mtech_products(tables, text)
             if records:
                 logger.info("Extraction method: M-Tech (%d records)", len(records))
+                return records
+
+        # Step 0g — Ma*Fra / Авиатранс (explicit selection or auto-detection)
+        if supplier == "mafra" or (supplier == "auto" and _is_mafra_document(text)):
+            records = extract_mafra_products(tables, text)
+            if records:
+                logger.info("Extraction method: Ma*Fra (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex

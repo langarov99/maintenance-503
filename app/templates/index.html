@@ -269,7 +269,7 @@
   });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
+  const SUPPORTED_SUPPLIERS = new Set(['amio', 'avisa', 'mafra', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {

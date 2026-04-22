@@ -368,6 +368,7 @@ _mx_db:    Optional[SupplierNameDatabase] = None
 _avisa_db: Optional[SupplierNameDatabase] = None
 _amio_db:  Optional[SupplierNameDatabase] = None
 _mtech_db: Optional[SupplierNameDatabase] = None
+_mafra_db: Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -400,3 +401,11 @@ def get_mtech_db(data_dir: str) -> SupplierNameDatabase:
         _mtech_db = SupplierNameDatabase(data_dir, "mtech-products.xlsx")
         _mtech_db.load()
     return _mtech_db
+
+
+def get_mafra_db(data_dir: str) -> SupplierNameDatabase:
+    global _mafra_db
+    if _mafra_db is None:
+        _mafra_db = SupplierNameDatabase(data_dir, "mafra-products.xlsx")
+        _mafra_db.load()
+    return _mafra_db

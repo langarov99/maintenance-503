@@ -18,7 +18,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -227,6 +227,7 @@ async def extract(
             "avisa":         get_avisa_db,
             "amio":          get_amio_db,
             "mtech":         get_mtech_db,
+            "mafra":         get_mafra_db,
         }
         if supplier in _name_db_map:
             name_db = _name_db_map[supplier](str(DATA_DIR))
@@ -321,6 +322,10 @@ async def health():
         "mtech": {
             "db_loaded": get_mtech_db(str(DATA_DIR)).is_loaded,
             "by_code":   len(get_mtech_db(str(DATA_DIR))._by_code),
+        },
+        "mafra": {
+            "db_loaded": get_mafra_db(str(DATA_DIR)).is_loaded,
+            "by_code":   len(get_mafra_db(str(DATA_DIR))._by_code),
         },
     }
 
