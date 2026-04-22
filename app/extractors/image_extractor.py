@@ -1,4 +1,5 @@
 import easyocr
+import numpy as np
 from PIL import Image
 from pathlib import Path
 
@@ -25,6 +26,6 @@ class ImageExtractor:
         return self.extract_from_pil(img)
 
     def extract_from_pil(self, img: Image.Image) -> dict:
-        results = self.reader.readtext(img, detail=1, paragraph=False)
+        results = self.reader.readtext(np.array(img), detail=1, paragraph=False)
         lines = [text for (_, text, conf) in results if conf > 0.3]
         return {"text": "\n".join(lines), "tables": [], "source": "ocr"}
