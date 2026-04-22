@@ -1,4 +1,6 @@
 import logging
+import os
+from pathlib import Path
 import pytesseract
 from PIL import Image
 
@@ -14,11 +16,14 @@ LANGUAGE_MAP = {
     "de": "deu",
 }
 
-# Common Tesseract install paths on Windows
+# Base dir = root of the project (two levels up from this file)
+_BASE_DIR = Path(__file__).parent.parent.parent
+
+# Portable install next to the project takes priority over system installs
 _TESSERACT_PATHS = [
+    str(_BASE_DIR / "Tesseract-OCR" / "tesseract.exe"),   # portable on flash drive
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    r"C:\Users\Public\Tesseract-OCR\tesseract.exe",
 ]
 
 
