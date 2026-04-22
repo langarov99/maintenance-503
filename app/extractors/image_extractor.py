@@ -123,49 +123,53 @@ def _filter_table_lines(lines: list, tolerance_pct: float = 0.35,
                         min_count: int = 5) -> list:
     """Keep only the longest run of evenly-spaced lines (= the table body).
 
-    Uses the most common gap in the 20-150px range (typical invoice row height)
-    instead of the overall median.  The overall median is distorted when many
-    false-positive lines from the header/footer have small gaps (5-15px).
+    Tries every candidate gap value (20-150px range) and picks the one that
+    produces the LONGEST consistent run of lines.  A 26-row product table
+    will always produce a longer run than header/footer patterns regardless
+    of which gap value is most frequent overall.
     """
     if len(lines) < min_count:
         return lines
 
     gaps = [lines[i + 1] - lines[i] for i in range(len(lines) - 1)]
 
-    # Restrict to gap values typical for table rows (20–150 px)
+    # Collect unique candidate gap buckets (5 px resolution) in table-row range
+    from collections import Counter
     table_gaps = [g for g in gaps if 20 <= g <= 150]
-    if table_gaps:
-        from collections import Counter
-        # Bucket to nearest 5 px to smooth noise, then pick most common
-        bucketed = [round(g / 5) * 5 for g in table_gaps]
-        best_bucket = Counter(bucketed).most_common(1)[0][0]
-        # Refine: average of actual gaps close to that bucket
-        near = [g for g in table_gaps if abs(g - best_bucket) <= 10]
-        target_gap = int(sum(near) / len(near)) if near else best_bucket
-    else:
-        target_gap = sorted(gaps)[len(gaps) // 2]
-
-    if target_gap < 10:
+    if not table_gaps:
         return lines
 
-    tol = max(6, int(target_gap * tolerance_pct))
+    candidates = sorted(set(round(g / 5) * 5 for g in table_gaps))
 
-    best_start, best_len = 0, 1
-    curr_start, curr_len = 0, 1
-    for i, g in enumerate(gaps):
-        if abs(g - target_gap) <= tol:
-            curr_len += 1
-            if curr_len > best_len:
-                best_start, best_len = curr_start, curr_len
-        else:
-            curr_start = i + 1
-            curr_len = 1
+    best_result = lines
+    best_run_len = 0
+    best_gap = 0
 
-    # +1 because we need the closing line of the last row
-    result = lines[best_start: best_start + best_len + 1]
-    logger.info("Line filter: %d → %d lines (target gap %dpx, tol ±%dpx)",
-                len(lines), len(result), target_gap, tol)
-    return result
+    for bucket in candidates:
+        tol = max(6, int(bucket * tolerance_pct))
+        curr_start, curr_len = 0, 1
+        run_start, run_len = 0, 1
+        for i, g in enumerate(gaps):
+            if abs(g - bucket) <= tol:
+                curr_len += 1
+                if curr_len > run_len:
+                    run_start, run_len = curr_start, curr_len
+            else:
+                curr_start = i + 1
+                curr_len = 1
+
+        if run_len > best_run_len:
+            best_run_len = run_len
+            best_gap = bucket
+            # +1: include closing line of the last row
+            best_result = lines[run_start: run_start + run_len + 1]
+
+    logger.info("Line filter: %d → %d lines (best gap %dpx, tol ±%dpx)",
+                len(lines), len(best_result), best_gap,
+                max(6, int(best_gap * tolerance_pct)))
+    if len(best_result) < min_count:
+        return lines
+    return best_result
 
 
 def _extract_table_cells(img: Image.Image, lang: str) -> list:
