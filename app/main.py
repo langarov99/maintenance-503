@@ -234,6 +234,13 @@ async def extract(
                     if suffix.isdigit():
                         rec.product_code = "SL" + suffix
 
+        # Car Passion: add CP- prefix so codes match the reference DB
+        # Invoice: 20108 → DB: CP-20108
+        if supplier == "car_passion":
+            for rec in records:
+                if rec.product_code and not rec.product_code.upper().startswith("CP-"):
+                    rec.product_code = "CP-" + rec.product_code
+
         # Enrich name from supplier-specific DB (Maxton / Avisa / Amio / Amal-Plast)
         _name_db_map = {
             "maxton_design": get_maxton_db,
