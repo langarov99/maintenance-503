@@ -2395,6 +2395,7 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
 
     if header_idx is not None:
         headers = [norm(c) for c in table[header_idx]]
+        ncols_header = len(headers)
         logger.info("Gumarny Zubri: header at row %d: %s", header_idx, headers)
 
         def find(kws):
@@ -2419,11 +2420,23 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
         if unit_idx is not None and unit_idx == total_idx:
             unit_idx = None
 
-        logger.info("Gumarny Zubri: cols — code=%s desc=%s qty=%s unit=%s price=%s total=%s",
-                    code_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
-        data_start = header_idx + 1
+        # Detect degenerate merged header: all key columns collapse to same index
+        # (pdfplumber merged all header cells into one) → fall through to Phase 2
+        key_indices = [i for i in [code_idx, desc_idx, qty_idx, price_idx, total_idx]
+                       if i is not None]
+        header_is_degenerate = ncols_header <= 2 or (
+            len(key_indices) >= 3 and len(set(key_indices)) == 1
+        )
 
-    else:
+        if header_is_degenerate:
+            logger.info("Gumarny Zubri: header degenerate (merged cells) — falling to Phase 2")
+            header_idx = None  # force Phase 2 below
+        else:
+            logger.info("Gumarny Zubri: cols — code=%s desc=%s qty=%s unit=%s price=%s total=%s",
+                        code_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
+            data_start = header_idx + 1
+
+    if header_idx is None:
         # ── Phase 2: continuation table (page 2+) — scan for code column ─────
         logger.info("Gumarny Zubri: no header in %d-row table — scanning for code column",
                     len(table))
@@ -2552,17 +2565,40 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
 
 def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Gumarny Zubri: %d table(s) received", len(tables))
-    records = []
-    seen_codes: set[str] = set()
+    records: list[ProductRecord] = []
+    seen_codes: dict[str, int] = {}  # code → index in records
+
     for table in tables:
         for rec in _parse_gumarny_zubri_table(table):
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
+            code = rec.product_code
+            if code not in seen_codes:
+                seen_codes[code] = len(records)
                 records.append(rec)
 
-    if not records and text:
-        logger.info("Gumarny Zubri: table gave 0 records — trying text fallback")
-        records = _parse_gumarny_zubri_from_text(text)
+    # Always supplement with text — fills in records missed by table extraction
+    # and patches missing numeric fields on records that table found but couldn't
+    # parse (e.g. degenerate 2-column tables with merged headers).
+    if text:
+        text_records = _parse_gumarny_zubri_from_text(text)
+        added = 0
+        for rec in text_records:
+            code = rec.product_code
+            if code not in seen_codes:
+                seen_codes[code] = len(records)
+                records.append(rec)
+                added += 1
+            else:
+                existing = records[seen_codes[code]]
+                if not existing.price and rec.price:
+                    existing.price = rec.price
+                if not existing.total_price and rec.total_price:
+                    existing.total_price = rec.total_price
+                if not existing.quantity and rec.quantity:
+                    existing.quantity = rec.quantity
+                if not existing.product_name and rec.product_name:
+                    existing.product_name = rec.product_name
+        if added:
+            logger.info("Gumarny Zubri text: added %d records not found in tables", added)
 
     logger.info("Gumarny Zubri extraction: %d records total", len(records))
     return records
