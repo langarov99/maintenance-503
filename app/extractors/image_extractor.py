@@ -90,65 +90,136 @@ def _preprocess_binary(img: Image.Image) -> Image.Image:
     img = img.convert("L")
     img = ImageEnhance.Contrast(img).enhance(2.5)
     t = _otsu_threshold(img)
-    # Clamp: never go below 100 or above 200 to avoid all-black/all-white
     t = max(100, min(200, t))
     return img.point(lambda p: 255 if p > t else 0, 'L')
 
 
-def _extract_structured_text(img: Image.Image, lang: str) -> str:
-    """Use word bounding boxes to reconstruct properly aligned text lines.
+def _find_grid_lines(binary_arr, axis: int,
+                     min_dark: float = 0.25,
+                     min_gap: int = 15) -> list:
+    """Return pixel positions of grid lines detected along the given axis.
 
-    Tesseract's image_to_string loses table structure; image_to_data returns
-    per-word (x, y) coordinates so we can group words by row ourselves.
+    axis=0 → horizontal lines (high dark-pixel ratio across each row)
+    axis=1 → vertical lines  (high dark-pixel ratio across each column)
     """
+    import numpy as np
+    # mean across the OTHER axis gives one value per row/column
+    ratios = binary_arr.mean(axis=1 - axis)
+    is_line = ratios > min_dark
+
+    # numpy diff to find run starts/ends
+    padded = np.concatenate(([False], is_line, [False]))
+    changes = np.diff(padded.astype(np.int8))
+    starts = np.where(changes == 1)[0]
+    ends   = np.where(changes == -1)[0]
+
+    lines = []
+    for s, e in zip(starts, ends):
+        center = int((s + e) // 2)
+        if not lines or center - lines[-1] >= min_gap:
+            lines.append(center)
+    return lines
+
+
+def _extract_table_cells(img: Image.Image, lang: str) -> list:
+    """Detect invoice table grid via line analysis and OCR cells in one pass.
+
+    Strategy:
+      1. High-contrast grayscale → binary array
+      2. Find horizontal grid lines (row separators) and vertical grid lines
+      3. ONE pytesseract.image_to_data() call → word bounding boxes
+      4. Assign each word to its cell by comparing word centre to grid boundaries
+      5. Return list[list[str]] — the cell grid ready for _parse_mafra_table()
+
+    This mirrors how a human reads a table: cell by cell, not line by line.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        logger.warning("numpy not available — skipping grid table extraction")
+        return []
+
+    # ── 1. Scale & binarise ──────────────────────────────────────────────────
+    w, h = img.size
+    if w < 2000:
+        scale = max(2, 2400 // max(w, 1))
+        img = img.resize((w * scale, h * scale), Image.LANCZOS)
+
+    gray = img.convert("L")
+    hi_contrast = ImageEnhance.Contrast(gray).enhance(3.5)
+    arr = np.array(hi_contrast, dtype=np.float32) / 255.0
+    binary = (arr < 0.35).astype(np.float32)   # 1.0 = dark pixel
+
+    # ── 2. Grid line detection ────────────────────────────────────────────────
+    # Horizontal lines: rows where ≥25 % of pixels are dark
+    # Vertical lines:   cols where ≥12 % of pixels are dark (thinner in scan)
+    hlines = _find_grid_lines(binary, axis=0, min_dark=0.25, min_gap=20)
+    vlines = _find_grid_lines(binary, axis=1, min_dark=0.12, min_gap=25)
+
+    logger.info("Grid detection: %d horizontal lines, %d vertical lines",
+                len(hlines), len(vlines))
+
+    # Need at least a header row + several data rows, and several columns
+    if len(hlines) < 5 or len(vlines) < 4:
+        logger.info("Grid too sparse — falling back to text extraction")
+        return []
+
+    # ── 3. Single OCR pass ────────────────────────────────────────────────────
+    ocr_img = ImageEnhance.Contrast(gray).enhance(2.0)
     data = pytesseract.image_to_data(
-        img, lang=lang,
+        ocr_img, lang=lang,
         config="--psm 6 --oem 3",
         output_type=Output.DICT,
     )
 
-    words = []
-    for i in range(len(data["text"])):
-        text = str(data["text"][i]).strip()
+    # ── 4. Assign words to cells ──────────────────────────────────────────────
+    n_rows = len(hlines) - 1
+    n_cols = len(vlines) - 1
+    grid = [[[] for _ in range(n_cols)] for _ in range(n_rows)]
+
+    for i, word in enumerate(data["text"]):
+        word = str(word).strip()
+        if not word:
+            continue
         conf = int(data["conf"][i])
-        if text and conf > 10:
-            words.append({
-                "text": text,
-                "x": data["left"][i],
-                "y": data["top"][i],
-                "h": data["height"][i],
-            })
+        if conf <= 0:
+            continue
 
-    if not words:
-        return ""
+        # Word centre
+        wx = data["left"][i] + data["width"][i] // 2
+        wy = data["top"][i] + data["height"][i] // 2
 
-    # Estimate average character height for row-grouping tolerance
-    avg_h = sum(w["h"] for w in words) / len(words)
-    tolerance = max(8, int(avg_h * 0.6))
+        # Binary-search for row
+        row_idx = None
+        for r in range(n_rows):
+            if hlines[r] <= wy < hlines[r + 1]:
+                row_idx = r
+                break
 
-    # Sort words top-to-bottom, left-to-right
-    words.sort(key=lambda w: (w["y"], w["x"]))
+        # Binary-search for column
+        col_idx = None
+        for c in range(n_cols):
+            if vlines[c] <= wx < vlines[c + 1]:
+                col_idx = c
+                break
 
-    # Group into rows: words whose y-tops differ by less than tolerance
-    # share the same row
-    rows: list[list[dict]] = []
-    current: list[dict] = []
-    row_y = words[0]["y"]
+        if row_idx is not None and col_idx is not None:
+            grid[row_idx][col_idx].append(word)
 
-    for w in words:
-        if w["y"] - row_y > tolerance:
-            if current:
-                rows.append(sorted(current, key=lambda c: c["x"]))
-            current = [w]
-            row_y = w["y"]
-        else:
-            current.append(w)
-    if current:
-        rows.append(sorted(current, key=lambda c: c["x"]))
+    # ── 5. Flatten to strings, drop fully empty rows ──────────────────────────
+    result = []
+    for row in grid:
+        cells = [" ".join(words).strip() for words in row]
+        if any(cells):
+            result.append(cells)
 
-    lines = [" ".join(w["text"] for w in row) for row in rows]
-    logger.info("Structured OCR: %d raw words → %d lines", len(words), len(lines))
-    return "\n".join(lines)
+    logger.info("Cell grid built: %d rows × %d cols", len(result), n_cols)
+
+    # Log first 5 rows for debugging
+    for ri, row in enumerate(result[:5]):
+        logger.info("  row %d: %s", ri, " | ".join(f'[{c}]' for c in row))
+
+    return result
 
 
 class ImageExtractor:
@@ -163,24 +234,28 @@ class ImageExtractor:
 
     def extract_from_pil(self, img: Image.Image) -> dict:
         try:
-            # Pass A: soft contrast + PSM 4 (single column — code+price stay on same line)
+            # ── Grid-based cell extraction (best for table invoices) ──────────
+            cell_table = _extract_table_cells(img, self.lang_str)
+
+            # ── Pass A: soft contrast + PSM 4 (text fallback) ────────────────
             img_a = _preprocess(img)
             text_a = pytesseract.image_to_string(img_a, lang=self.lang_str,
                                                  config="--psm 4 --oem 3")
             lines_a = [l for l in text_a.splitlines() if l.strip()]
 
-            # Pass B: hard Otsu binarization + PSM 6 (uniform block — catches faint rows)
+            # ── Pass B: Otsu binary + PSM 6 (catches faint rows) ─────────────
             img_b = _preprocess_binary(img)
             text_b = pytesseract.image_to_string(img_b, lang=self.lang_str,
                                                  config="--psm 6 --oem 3")
             lines_b = [l for l in text_b.splitlines() if l.strip()]
 
-            logger.info("OCR dual-pass: A=%d lines, B=%d lines", len(lines_a), len(lines_b))
+            logger.info("OCR: grid=%d rows, textA=%d lines, textB=%d lines",
+                        len(cell_table), len(lines_a), len(lines_b))
             return {
-                "text":  "\n".join(lines_a),
-                "text2": "\n".join(lines_b),
-                "tables": [],
-                "source": "ocr_dual",
+                "text":   "\n".join(lines_a),
+                "text2":  "\n".join(lines_b),
+                "tables": [cell_table] if cell_table else [],
+                "source": "ocr_grid" if cell_table else "ocr_dual",
             }
         except Exception as e:
             logger.error("OCR failed: %s", e)
