@@ -2337,6 +2337,220 @@ def extract_amal_plast_products(tables: list, text: str = "") -> list[ProductRec
 
 
 # ---------------------------------------------------------------------------
+# Gumarny Zubri-specific extractor
+# ---------------------------------------------------------------------------
+#
+# Invoice layout (English):
+#   Item code | Name | Tax No. | Quantity | Price | Unit | VAT % | Rabat % | Total amount
+#
+# Product codes: 4-8 digits optionally followed by 0-4 letters  (222349, 216527BAL)
+# Section-header rows have short letter-only codes (BO, SP) — no digits → skipped.
+# Number format: Czech comma-decimal  (5,000 = 5 units;  16,60 = 16.60 EUR)
+
+_GZ_CODE_RE = re.compile(r'^\d{4,8}[A-Z]{0,4}$')
+
+
+def _is_gumarny_zubri_document(text: str) -> bool:
+    return bool(re.search(r'gumarny|zubr[ií]', text, re.IGNORECASE))
+
+
+def _gz_num(raw: str) -> str:
+    """Czech comma-decimal → dot-decimal string, integer-stripped if no fraction."""
+    if not raw or not raw.strip():
+        return ""
+    v = raw.strip().replace(',', '.')
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else f"{f:.2f}"
+    except ValueError:
+        return raw.strip()
+
+
+def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
+    if not table or len(table) < 2:
+        return []
+
+    def norm(s):
+        return str(s or "").lower().strip()
+
+    def cell(row, idx):
+        if idx is None or idx < 0 or idx >= len(row):
+            return ""
+        return str(row[idx] or "").strip()
+
+    # ── Phase 1: locate header row ────────────────────────────────────────────
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(norm(c) for c in row)
+        if "item code" in joined and ("quantity" in joined or "total" in joined):
+            header_idx = i
+            break
+
+    if header_idx is not None:
+        headers = [norm(c) for c in table[header_idx]]
+        logger.info("Gumarny Zubri: header at row %d: %s", header_idx, headers)
+
+        def find(kws):
+            for kw in kws:
+                for i, h in enumerate(headers):
+                    if kw in h:
+                        return i
+            return None
+
+        code_idx  = find(["item code", "item"])
+        desc_idx  = find(["name", "description"])
+        qty_idx   = find(["quantity", "qty"])
+        unit_idx  = find(["unit"])
+        price_idx = find(["price"])
+        total_idx = find(["total amount", "total"])
+        data_start = header_idx + 1
+
+    else:
+        # ── Phase 2: continuation table (page 2+) — scan for code column ─────
+        logger.info("Gumarny Zubri: no header in %d-row table — scanning for code column",
+                    len(table))
+        ncols = max((len(r) for r in table if r), default=0)
+        if not ncols:
+            return []
+        counts = [0] * ncols
+        for row in table[:min(20, len(table))]:
+            for ci in range(min(len(row), ncols)):
+                if row[ci] and _GZ_CODE_RE.match(str(row[ci]).strip()):
+                    counts[ci] += 1
+        best = max(range(ncols), key=lambda i: counts[i])
+        if counts[best] == 0:
+            logger.info("Gumarny Zubri: no code pattern in continuation table — skipping")
+            return []
+        # Column layout relative to code column:
+        # code | desc | tax_no | qty | price | unit | vat% | rabat% | total
+        code_idx  = best
+        desc_idx  = best + 1 if best + 1 < ncols else None
+        qty_idx   = best + 3 if best + 3 < ncols else None
+        price_idx = best + 4 if best + 4 < ncols else None
+        unit_idx  = best + 5 if best + 5 < ncols else None
+        total_idx = best + 8 if best + 8 < ncols else None
+        logger.info("Gumarny Zubri: continuation cols — code=%d desc=%s qty=%s "
+                    "price=%s unit=%s total=%s",
+                    code_idx, desc_idx, qty_idx, price_idx, unit_idx, total_idx)
+        data_start = 0
+
+    if code_idx is None:
+        return []
+
+    records = []
+    for row in table[data_start:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+        code = cell(row, code_idx)
+        if not code:
+            continue
+        if not re.search(r'\d', code):   # skip section headers like "BO"
+            continue
+        if not _GZ_CODE_RE.match(code):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        if desc_idx is not None:
+            desc = cell(row, desc_idx)
+            if desc and len(desc) > 2:
+                rec.product_name = desc[:120]
+
+        qty_raw  = cell(row, qty_idx)  if qty_idx  is not None else ""
+        unit_raw = cell(row, unit_idx) if unit_idx is not None else ""
+        if qty_raw:
+            qty_str = _gz_num(qty_raw)
+            if qty_str:
+                rec.quantity = qty_str + (" " + unit_raw if unit_raw else "")
+
+        price_raw = cell(row, price_idx) if price_idx is not None else ""
+        if price_raw:
+            p = _gz_num(price_raw)
+            if p:
+                rec.price = p + " EUR"
+
+        total_raw = cell(row, total_idx) if total_idx is not None else ""
+        if total_raw:
+            t = _gz_num(total_raw)
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    logger.info("Gumarny Zubri table: %d records", len(records))
+    return records
+
+
+def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback for Gumarny Zubri invoices.
+
+    Each product line starts with the item code.  The tax-number column ("47")
+    separates the description from the numeric columns.
+    """
+    records = []
+    seen_codes: set[str] = set()
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        tokens = line.split()
+        if not tokens:
+            continue
+        code = tokens[0]
+        if not _GZ_CODE_RE.match(code) or code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        # Description ends at the tax-no token ("47") or first decimal number
+        desc_tokens = []
+        for tok in tokens[1:]:
+            if tok == "47" or re.match(r'^\d+[,.]\d+$', tok):
+                break
+            desc_tokens.append(tok)
+        desc = " ".join(desc_tokens).strip()[:120] or None
+
+        decimals = re.findall(r'\b\d{1,6}[,.]\d{2}\b', line)
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+        rec.product_name = desc
+
+        if decimals:
+            p = _gz_num(decimals[0])
+            if p:
+                rec.price = p + " EUR"
+        if len(decimals) >= 2:
+            t = _gz_num(decimals[-1])
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    logger.info("Gumarny Zubri text: %d records", len(records))
+    return records
+
+
+def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Gumarny Zubri: %d table(s) received", len(tables))
+    records = []
+    seen_codes: set[str] = set()
+    for table in tables:
+        for rec in _parse_gumarny_zubri_table(table):
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+
+    if not records and text:
+        logger.info("Gumarny Zubri: table gave 0 records — trying text fallback")
+        records = _parse_gumarny_zubri_from_text(text)
+
+    logger.info("Gumarny Zubri extraction: %d records total", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -2420,6 +2634,13 @@ class FieldMapper:
             records = extract_vinove_products(tables, text)
             if records:
                 logger.info("Extraction method: Vinove (%d records)", len(records))
+                return records
+
+        # Step 0k — Gumarny Zubri (explicit selection or auto-detection)
+        if supplier == "gumarny_zubri" or (supplier == "auto" and _is_gumarny_zubri_document(text)):
+            records = extract_gumarny_zubri_products(tables, text)
+            if records:
+                logger.info("Extraction method: Gumarny Zubri (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
