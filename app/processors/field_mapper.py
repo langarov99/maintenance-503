@@ -1580,6 +1580,149 @@ def extract_mafra_products(tables: list, text: str = "", text2: str = "") -> lis
 
 
 # ---------------------------------------------------------------------------
+# Amal-Plast specific extractor
+# ---------------------------------------------------------------------------
+
+_AMAL_PLAST_AP_RE = re.compile(r'^AP\d+', re.IGNORECASE)
+
+
+def _is_amal_plast_document(text: str) -> bool:
+    return bool(re.search(r'amal.?plast', text, re.IGNORECASE))
+
+
+def _parse_amal_plast_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one PDF table from an Amal-Plast invoice.
+
+    Dual-language headers: English (CODE, QTY, NET PRICE, NET VALUE) and
+    Polish (Kod, Ilość, Cena netto, Wartość netto).  Product codes in the
+    CODE/Kod column are AP-prefix codes (e.g. AP1101).
+    """
+    if not table or len(table) < 2:
+        return []
+
+    def norm(s):
+        return str(s or "").lower().strip()
+
+    def cell_text(row, idx):
+        if idx is None or idx >= len(row):
+            return ""
+        val = str(row[idx] or "").strip()
+        for line in val.split("\n"):
+            if line.strip():
+                return line.strip()
+        return val
+
+    # Find header row containing code/kod AND qty/ilość keywords
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(norm(c) for c in row)
+        if any(kw in joined for kw in ["code", "kod"]) and \
+           any(kw in joined for kw in ["qty", "ilosc", "ilo"]):
+            header_idx = i
+            break
+
+    if header_idx is None:
+        logger.info("Amal-Plast: no header row found in %d-row table", len(table))
+        return []
+
+    headers = [norm(c) for c in table[header_idx]]
+    logger.info("Amal-Plast: header at row %d: %s", header_idx, headers)
+
+    def find(kws):
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    return i
+        return None
+
+    code_idx  = find(["code", "kod"])
+    qty_idx   = find(["ilo", "qty", "quantity"])
+    price_idx = find(["cena netto", "net price", "cena"])
+    total_idx = find(["warto", "net value", "wartosc"])
+    desc_idx  = find(["product", "towar", "service", "nazwa"])
+
+    if code_idx is None:
+        logger.info("Amal-Plast: CODE column not found in %s", headers)
+        return []
+
+    # Validate code column: sample first few data rows to confirm AP codes.
+    # If the detected column gives unit-like values ("kpl", "szt"), shift.
+    _UNIT_WORDS = {"kpl", "szt", "pcs", "szt.", "j.m", "unit", "jednostka"}
+
+    def _sample(col):
+        for row in table[header_idx + 1: header_idx + 5]:
+            v = cell_text(row, col)
+            if v and v.lower() not in ("kod", "code", "nan", "") and not v.lower() in _UNIT_WORDS:
+                return v
+        return ""
+
+    sample = _sample(code_idx)
+    if sample and not _AMAL_PLAST_AP_RE.match(sample):
+        for candidate in [code_idx - 1, code_idx + 1, code_idx + 2]:
+            if 0 <= candidate < len(headers):
+                s = _sample(candidate)
+                if s and _AMAL_PLAST_AP_RE.match(s):
+                    logger.info("Amal-Plast: code_idx corrected %d→%d (was %r, now %r)",
+                                code_idx, candidate, sample, s)
+                    code_idx = candidate
+                    break
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        code = cell_text(row, code_idx)
+
+        if not code or code.lower() in ("kod", "code", "nan", "") or code.lower() in _UNIT_WORDS:
+            continue
+        if code.isdigit() and len(code) <= 3:
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+
+        if desc_idx is not None:
+            desc = cell_text(row, desc_idx)
+            if desc and len(desc) > 3 and not re.match(r'^\d+$', desc):
+                rec.product_name = desc[:120]
+
+        qty_raw = cell_text(row, qty_idx) if qty_idx is not None else ""
+        if qty_raw:
+            try:
+                n = int(float(qty_raw.replace(",", ".")))
+                rec.quantity = str(n)
+            except (ValueError, TypeError):
+                rec.quantity = qty_raw
+
+        price_raw = cell_text(row, price_idx) if price_idx is not None else ""
+        if price_raw:
+            p = re.sub(r'[^\d.,]', '', price_raw).replace(',', '.')
+            if p:
+                rec.price = p + " EUR"
+
+        total_raw = cell_text(row, total_idx) if total_idx is not None else ""
+        if total_raw:
+            t = re.sub(r'[^\d.,]', '', total_raw).replace(',', '.')
+            if t:
+                rec.total_price = t + " EUR"
+
+        records.append(rec)
+
+    logger.info("Amal-Plast: %d records from %d table rows", len(records), len(table) - header_idx - 1)
+    return records
+
+
+def extract_amal_plast_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Amal-Plast: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_amal_plast_table(table))
+    logger.info("Amal-Plast extraction: %d records total", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1642,6 +1785,13 @@ class FieldMapper:
             records = extract_mafra_products(tables, text, text2)
             if records:
                 logger.info("Extraction method: Ma*Fra (%d records)", len(records))
+                return records
+
+        # Step 0h — Amal-Plast (explicit selection or auto-detection)
+        if supplier == "amal_plast" or (supplier == "auto" and _is_amal_plast_document(text)):
+            records = extract_amal_plast_products(tables, text)
+            if records:
+                logger.info("Extraction method: Amal-Plast (%d records)", len(records))
                 return records
 
         # For explicitly selected non-OSRAM supplier skip straight to table/regex
