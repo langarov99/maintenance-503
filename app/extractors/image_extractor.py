@@ -4,6 +4,12 @@ from pathlib import Path
 import pytesseract
 from pytesseract import Output
 from PIL import Image, ImageEnhance, ImageFilter
+try:
+    import cv2
+    import numpy as np
+    _OPENCV_AVAILABLE = True
+except ImportError:
+    _OPENCV_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -172,21 +178,146 @@ def _filter_table_lines(lines: list, tolerance_pct: float = 0.35,
     return best_result
 
 
-def _extract_table_cells(img: Image.Image, lang: str) -> list:
-    """Detect invoice table grid via line analysis and assign OCR words to cells.
+def _cluster_lines(positions: list, gap: int = 20) -> list:
+    """Merge nearby pixel positions into a single representative position."""
+    if not positions:
+        return []
+    positions = sorted(set(positions))
+    clusters = [[positions[0]]]
+    for p in positions[1:]:
+        if p - clusters[-1][-1] <= gap:
+            clusters[-1].append(p)
+        else:
+            clusters.append([p])
+    return [int(sum(c) / len(c)) for c in clusters]
 
-    Steps
-    -----
-    1. High-contrast binary array  (numpy)
-    2. Horizontal lines with HIGH threshold (≥50 % dark) — only thick table borders
-    3. Filter to the longest evenly-spaced run  → table body rows only
-    4. Vertical lines detected INSIDE the table area only
-    5. ONE pytesseract.image_to_data() call → word bounding boxes
-    6. Each word assigned to its cell by comparing word centre to grid boundaries
-    7. Return list[list[str]] ready for _parse_mafra_table()
+
+def _extract_table_cells_cv(img: Image.Image, lang: str) -> list:
+    """OpenCV HoughLinesP-based grid detection with per-cell OCR crops.
+
+    Uses cv2.HoughLinesP to find actual line segments, clusters them into
+    a grid, then runs pytesseract on individual cell crops for high accuracy.
     """
+    # ── Scale image ───────────────────────────────────────────────────────────
+    w, h = img.size
+    if w < 2000:
+        scale = max(2, 2400 // max(w, 1))
+        img = img.resize((w * scale, h * scale), Image.LANCZOS)
+        w, h = img.size
+
+    gray_arr = np.array(img.convert("L"))
+
+    # ── Adaptive threshold → edges → Hough lines ─────────────────────────────
+    # Use THRESH_BINARY_INV so dark lines become white (255) on black background
+    blur = cv2.GaussianBlur(gray_arr, (3, 3), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Erode horizontally/vertically to isolate line segments
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
+    h_lines_img = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+    v_lines_img = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+
+    # Detect horizontal line positions (y-coordinates)
+    h_segs = cv2.HoughLinesP(h_lines_img, 1, 3.14159/180, threshold=80,
+                              minLineLength=w // 4, maxLineGap=60)
+    # Detect vertical line positions (x-coordinates)
+    v_segs = cv2.HoughLinesP(v_lines_img, 1, 3.14159/180, threshold=60,
+                              minLineLength=h // 8, maxLineGap=40)
+
+    if h_segs is None or v_segs is None:
+        logger.info("HoughLinesP: insufficient lines (h=%s v=%s) — falling back",
+                    0 if h_segs is None else len(h_segs),
+                    0 if v_segs is None else len(v_segs))
+        return []
+
+    raw_h = [int((seg[0][1] + seg[0][3]) / 2) for seg in h_segs]
+    raw_v = [int((seg[0][0] + seg[0][2]) / 2) for seg in v_segs]
+
+    hlines = _cluster_lines(raw_h, gap=15)
+    vlines = _cluster_lines(raw_v, gap=30)
+
+    logger.info("HoughLinesP: %d h-segs → %d hlines, %d v-segs → %d vlines",
+                len(h_segs), len(hlines), len(v_segs), len(vlines))
+
+    if len(hlines) < 5 or len(vlines) < 3:
+        logger.info("Not enough grid lines (h=%d, v=%d) — falling back",
+                    len(hlines), len(vlines))
+        return []
+
+    # ── Filter to main table body ─────────────────────────────────────────────
+    hlines = _filter_table_lines(sorted(hlines), tolerance_pct=0.40, min_count=5)
+    vlines = sorted(vlines)
+
+    n_rows = len(hlines) - 1
+    n_cols = len(vlines) - 1
+    logger.info("Grid: %d rows × %d cols", n_rows, n_cols)
+
+    if n_rows < 3 or n_cols < 2:
+        return []
+
+    # ── OCR per cell ──────────────────────────────────────────────────────────
+    pil_gray = Image.fromarray(gray_arr)
+    result = []
+    pad = 3  # pixel padding inside each cell to avoid border noise
+
+    for r in range(n_rows):
+        row_cells = []
+        y1 = hlines[r] + pad
+        y2 = hlines[r + 1] - pad
+        if y2 - y1 < 5:
+            row_cells = [""] * n_cols
+            result.append(row_cells)
+            continue
+        for c in range(n_cols):
+            x1 = vlines[c] + pad
+            x2 = vlines[c + 1] - pad
+            if x2 - x1 < 5:
+                row_cells.append("")
+                continue
+            cell_img = pil_gray.crop((x1, y1, x2, y2))
+            # Upscale small cells for better OCR
+            cw, ch = cell_img.size
+            if cw < 100 or ch < 20:
+                cell_img = cell_img.resize((max(cw, 100), max(ch, 30)), Image.LANCZOS)
+            cell_img = ImageEnhance.Contrast(cell_img).enhance(2.0)
+            text = pytesseract.image_to_string(
+                cell_img, lang=lang,
+                config="--psm 7 --oem 3 -c tessedit_char_blacklist=|"
+            ).strip()
+            row_cells.append(text)
+        if any(row_cells):
+            result.append(row_cells)
+
+    logger.info("Cell grid built: %d rows × %d cols", len(result), n_cols)
+    for ri, row in enumerate(result[:6]):
+        logger.info("  row %d: %s", ri, " | ".join(f'[{c[:20]}]' for c in row))
+
+    return result
+
+
+def _extract_table_cells(img: Image.Image, lang: str) -> list:
+    """Detect invoice table grid and extract cell text.
+
+    Tries OpenCV HoughLinesP first (more reliable for scanned images),
+    falls back to numpy dark-ratio method if OpenCV is unavailable.
+    """
+    if _OPENCV_AVAILABLE:
+        try:
+            result = _extract_table_cells_cv(img, lang)
+            if result:
+                return result
+            logger.info("OpenCV grid extraction returned empty — trying numpy fallback")
+        except Exception as e:
+            logger.warning("OpenCV grid extraction failed: %s — trying numpy fallback", e)
+
+    return _extract_table_cells_numpy(img, lang)
+
+
+def _extract_table_cells_numpy(img: Image.Image, lang: str) -> list:
+    """Numpy dark-ratio fallback for grid detection (used when OpenCV unavailable)."""
     try:
-        import numpy as np
+        import numpy as _np
     except ImportError:
         logger.warning("numpy not available — skipping grid table extraction")
         return []
@@ -199,16 +330,11 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
 
     gray = img.convert("L")
     hi = ImageEnhance.Contrast(gray).enhance(3.5)
-    arr = np.array(hi, dtype=np.float32) / 255.0
-    binary = (arr < 0.35).astype(np.float32)   # 1.0 = dark pixel
+    arr = _np.array(hi, dtype=_np.float32) / 255.0
+    binary = (arr < 0.35).astype(_np.float32)
 
-    # ── 2. Horizontal lines ───────────────────────────────────────────────────
-    # 0.20 threshold catches thin inner row separators; _filter_table_lines
-    # removes false positives from header/footer using most-common-gap logic.
     hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.20, min_gap=15)
     logger.info("Horizontal lines (raw): %d", len(hlines_all))
-
-    # ── 3. Keep only the evenly-spaced run = product table rows ──────────────
     hlines = _filter_table_lines(hlines_all, tolerance_pct=0.40, min_count=5)
 
     if len(hlines) < 5:
@@ -216,10 +342,6 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
                     len(hlines))
         return []
 
-    # ── 4. Vertical lines — restricted to table y-range, higher threshold ────
-    # Threshold 0.40: horizontal grid lines create a ~0.30 dark-ratio "floor".
-    # min_gap=150: invoice column separators are often double-ruled; pairs of
-    # lines up to ~120 px apart must be merged into one logical separator.
     y_top    = max(0, hlines[0] - 5)
     y_bottom = min(binary.shape[0], hlines[-1] + 5)
     table_strip = binary[y_top:y_bottom, :]
@@ -230,7 +352,6 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         logger.info("Not enough vertical lines (%d) — falling back", len(vlines))
         return []
 
-    # ── 5. Single OCR pass ────────────────────────────────────────────────────
     ocr_img = ImageEnhance.Contrast(gray).enhance(2.0)
     data = pytesseract.image_to_data(
         ocr_img, lang=lang,
@@ -238,7 +359,6 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         output_type=Output.DICT,
     )
 
-    # ── 6. Assign words to cells ──────────────────────────────────────────────
     n_rows = len(hlines) - 1
     n_cols = len(vlines) - 1
     grid = [[[] for _ in range(n_cols)] for _ in range(n_rows)]
@@ -247,36 +367,20 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         word = str(word).strip()
         if not word or int(data["conf"][i]) <= 0:
             continue
-
         wx = data["left"][i] + data["width"][i] // 2
         wy = data["top"][i] + data["height"][i] // 2
-
-        row_idx = None
-        for r in range(n_rows):
-            if hlines[r] <= wy < hlines[r + 1]:
-                row_idx = r
-                break
-
-        col_idx = None
-        for c in range(n_cols):
-            if vlines[c] <= wx < vlines[c + 1]:
-                col_idx = c
-                break
-
+        row_idx = next((r for r in range(n_rows) if hlines[r] <= wy < hlines[r + 1]), None)
+        col_idx = next((c for c in range(n_cols) if vlines[c] <= wx < vlines[c + 1]), None)
         if row_idx is not None and col_idx is not None:
             grid[row_idx][col_idx].append(word)
 
-    # ── 7. Flatten, drop empty rows ───────────────────────────────────────────
     result = []
     for row in grid:
         cells = [" ".join(words).strip() for words in row]
         if any(cells):
             result.append(cells)
 
-    logger.info("Cell grid built: %d rows × %d cols", len(result), n_cols)
-    for ri, row in enumerate(result[:6]):
-        logger.info("  row %d: %s", ri, " | ".join(f'[{c[:20]}]' for c in row))
-
+    logger.info("Cell grid (numpy): %d rows × %d cols", len(result), n_cols)
     return result
 
 
