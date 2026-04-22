@@ -1278,7 +1278,7 @@ _OCR_FIX = str.maketrans({
 })
 
 # Applied only to the digit portion of a code (after the 1-2 letter prefix)
-_DIGIT_FIX = str.maketrans({'O': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'G': '6', 'B': '8', '+': '4'})
+_DIGIT_FIX = str.maketrans({'O': '0', 'I': '1', 'L': '1', 'V': '0', 'Z': '2', 'S': '5', 'G': '6', 'B': '8', '+': '4'})
 
 
 def _fix_mafra_code(s: str) -> str:
@@ -1442,7 +1442,7 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
         # Pass 1: find a Ma*Fra code with letter prefix (with OCR correction)
         code = None
         code_pos = -1
-        for ti, tok in enumerate(tokens[:6]):
+        for ti, tok in enumerate(tokens[:10]):
             fc = _fix_mafra_code(tok)
             if _MAFRA_CODE_RE.match(fc):
                 code = fc
@@ -1453,7 +1453,7 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
         # Require the token to consist ONLY of digits to avoid false positives
         # like "70x90cm" → "7090".
         if not code:
-            for ti, tok in enumerate(tokens[:6]):
+            for ti, tok in enumerate(tokens[:10]):
                 if re.match(r'^\d{3,5}$', tok):
                     candidate = 'H' + tok
                     if _MAFRA_CODE_RE.match(candidate):
@@ -1475,7 +1475,7 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
         # Pass 4: strip non-alphanumeric noise characters from token and retry
         # Catches cases like "P0+94" ('+' misread from '4'), "A.0521", "H|0050"
         if not code:
-            for ti, tok in enumerate(tokens[:6]):
+            for ti, tok in enumerate(tokens[:10]):
                 cleaned = re.sub(r'[^A-Za-z0-9АаВвСсЕеНнКкМмОоРрТтХхФф#]', '', tok)
                 if cleaned and cleaned != tok and len(cleaned) >= 3:
                     fc = _fix_mafra_code(cleaned)

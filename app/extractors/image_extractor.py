@@ -185,8 +185,10 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
     arr = np.array(hi, dtype=np.float32) / 255.0
     binary = (arr < 0.35).astype(np.float32)   # 1.0 = dark pixel
 
-    # ── 2. Horizontal lines — high threshold picks only solid table borders ───
-    hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.50, min_gap=20)
+    # ── 2. Horizontal lines ───────────────────────────────────────────────────
+    # Use 0.28 threshold: catches thin inner row separators (not just outer borders)
+    # and still rejects faint text/decorative elements below the 0.25 floor.
+    hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.28, min_gap=20)
     logger.info("Horizontal lines (raw): %d", len(hlines_all))
 
     # ── 3. Keep only the evenly-spaced run = product table rows ──────────────
@@ -197,11 +199,14 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
                     len(hlines))
         return []
 
-    # ── 4. Vertical lines detected only within the table y-range ─────────────
+    # ── 4. Vertical lines — restricted to table y-range, higher threshold ────
+    # Threshold 0.40: horizontal grid lines create a ~0.30 dark-ratio "floor"
+    # across all columns inside the table area; true column separators have ≥0.80.
+    # min_gap=60: merges double-border artifacts (two thin lines per separator).
     y_top    = max(0, hlines[0] - 5)
     y_bottom = min(binary.shape[0], hlines[-1] + 5)
     table_strip = binary[y_top:y_bottom, :]
-    vlines = _find_grid_lines(table_strip, axis=1, min_dark=0.25, min_gap=40)
+    vlines = _find_grid_lines(table_strip, axis=1, min_dark=0.40, min_gap=60)
     logger.info("Vertical lines (table area): %d", len(vlines))
 
     if len(vlines) < 3:
