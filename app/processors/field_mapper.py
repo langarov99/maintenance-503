@@ -1270,17 +1270,20 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 _MAFRA_CODE_RE = re.compile(r'^([A-Z]{1,2}\d{2,5})$')
 
-# Tail pattern: qty  бр  unit_price  EUR  [ТО]  total
-# OCR may write "бр" as "6p" or "бр" — match both
-_MAFRA_TAIL_RE = re.compile(
-    r'(\d+)\s+'
-    r'(?:бр|6p|бр\.)\s+'
-    r'(\d+[.,]\d+)\s+'
-    r'EUR\s*'
-    r'(?:\S+\s+)?'          # optional ТО column
-    r'(\d[\d\s]*[.,]\d+)\s*$',
-    re.IGNORECASE,
-)
+# Cyrillic look-alike → Latin substitution table for OCR-damaged product codes
+_OCR_FIX = str.maketrans({
+    'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H',
+    'К': 'K', 'М': 'M', 'О': '0', 'о': '0', 'Р': 'P',
+    'Т': 'T', 'Х': 'X', 'Ф': 'F', '#': 'H',
+})
+
+
+def _fix_mafra_code(s: str) -> str:
+    return s.upper().translate(_OCR_FIX)
+
+
+def _is_mafra_code(token: str) -> bool:
+    return bool(re.match(r'^[A-Z]{1,2}\d{2,5}$', _fix_mafra_code(token)))
 
 
 def _is_mafra_document(text: str) -> bool:
@@ -1369,10 +1372,10 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
 def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
     """Parse Ma*Fra invoice from OCR text (image/scanned PDF).
 
-    Each product line from OCR looks like:
-      1 A0521 PANNO MARTINA 2.0 6 packs of 1 towel 6 бр 4.89 EUR 29.35
-    Strategy: find lines where token 2 matches the product code pattern,
-    then parse the tail (qty бр price EUR total) from the right.
+    Tesseract output for scanned invoices is noisy: table borders become |,
+    Cyrillic chars replace Latin ones, # is misread as H, etc.
+    Strategy: clean each line, look for a product code anywhere in the first
+    5 tokens (after OCR correction), then extract total from the last decimal.
     """
     records = []
     lines = text.splitlines()
@@ -1380,53 +1383,70 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
     logger.info("Ma*Fra OCR text (%d lines):\n%s", len(lines),
                 "\n".join(f"  {i:3d}: {l}" for i, l in enumerate(lines[:60])))
 
+    seen_codes: set[str] = set()
+
     for raw in lines:
-        line = raw.strip()
-        if not line:
+        # Remove table border characters that OCR picks up
+        line = re.sub(r'[|\[\](){}]', ' ', raw)
+        line = re.sub(r'\s+', ' ', line).strip()
+        if len(line) < 4:
             continue
 
         tokens = line.split()
-        if len(tokens) < 5:
+
+        # Find a Ma*Fra product code in the first 5 tokens
+        code = None
+        code_pos = -1
+        for ti, tok in enumerate(tokens[:5]):
+            fc = _fix_mafra_code(tok)
+            if _MAFRA_CODE_RE.match(fc):
+                code = fc
+                code_pos = ti
+                break
+
+        if not code or code in seen_codes:
             continue
 
-        # First token must be a row number; second must be a Ma*Fra code
-        if not tokens[0].isdigit():
-            continue
-        if not _MAFRA_CODE_RE.match(tokens[1]):
-            continue
-
-        code = tokens[1]
-
-        # Try to parse tail: qty бр price EUR [TO] total
-        tail_m = _MAFRA_TAIL_RE.search(line)
-        if not tail_m:
+        # Extract all X.XX or X,XX numbers on the line
+        decimals = re.findall(r'\b\d{1,6}[.,]\d{2}\b', line)
+        if not decimals:
             continue
 
-        qty_raw   = tail_m.group(1)
-        price_raw = tail_m.group(2)
-        total_raw = tail_m.group(3).replace(" ", "")
+        seen_codes.add(code)
 
-        # Description = everything between code and tail match
-        tail_start = tail_m.start()
-        desc_part = line[len(tokens[0]) + 1 + len(code) + 1: tail_start].strip()
+        total_raw = decimals[-1]
+        # Unit price = last decimal before EUR keyword, or second-to-last
+        price_raw = None
+        eur_m = re.search(r'(\d+[.,]\d{2})\s*(?:EUR|BUR|eur)', line, re.IGNORECASE)
+        if eur_m:
+            price_raw = eur_m.group(1)
+        elif len(decimals) >= 2:
+            price_raw = decimals[-2]
+
+        # Description: word tokens after code, before first decimal
+        first_dec_pos = line.find(decimals[0]) if decimals else len(line)
+        code_end = line.upper().find(code)
+        if code_end >= 0:
+            code_end += len(code)
+        desc_raw = line[code_end:first_dec_pos] if code_end >= 0 else ""
+        # Strip non-word noise and keep only alphabetic tokens
+        desc_parts = [t for t in desc_raw.split()
+                      if re.match(r'^[A-Za-zА-Яа-яЁё]', t) and len(t) > 1
+                      and t.upper() not in ('EUR', 'BUR', 'ML', 'PZ')]
+        desc = " ".join(desc_parts[:12]).strip()[:120] or None
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
-        rec.product_name = desc_part[:150] if desc_part else None
-
-        try:
-            n = int(qty_raw)
-            rec.quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
-        except ValueError:
-            rec.quantity = qty_raw
-
-        p = _clean_num(price_raw)
-        if p:
-            rec.price = p + " EUR"
+        rec.product_name = desc
 
         t = _clean_num(total_raw)
         if t:
             rec.total_price = t + " EUR"
+
+        if price_raw and price_raw != total_raw:
+            p = _clean_num(price_raw)
+            if p:
+                rec.price = p + " EUR"
 
         records.append(rec)
 

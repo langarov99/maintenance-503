@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ _TESSERACT_PATHS = [
 
 
 def _find_tesseract():
-    import shutil, os
+    import shutil
     # 1. Already configured
     try:
         if pytesseract.get_tesseract_version():
@@ -51,6 +51,26 @@ def _find_tesseract():
 _find_tesseract()
 
 
+def _preprocess(img: Image.Image) -> Image.Image:
+    """Upscale + enhance contrast to improve Tesseract accuracy on scanned invoices."""
+    # Upscale small images — Tesseract works best at ~300 DPI
+    w, h = img.size
+    if w < 2000:
+        scale = max(2, 2400 // max(w, 1))
+        img = img.resize((w * scale, h * scale), Image.LANCZOS)
+
+    # Grayscale → easier for Tesseract
+    img = img.convert("L")
+
+    # Boost contrast so table lines don't bleed into text
+    img = ImageEnhance.Contrast(img).enhance(1.8)
+
+    # Light sharpening
+    img = img.filter(ImageFilter.SHARPEN)
+
+    return img
+
+
 class ImageExtractor:
     def __init__(self, languages: list[str] = None):
         lang_codes = [LANGUAGE_MAP.get(l, "eng") for l in (languages or ["bg", "en"])]
@@ -63,8 +83,10 @@ class ImageExtractor:
 
     def extract_from_pil(self, img: Image.Image) -> dict:
         try:
+            img = _preprocess(img)
+            # PSM 4 = single-column layout (better for invoices with wide table rows)
             text = pytesseract.image_to_string(img, lang=self.lang_str,
-                                               config="--psm 6")
+                                               config="--psm 4 --oem 3")
             lines = [l for l in text.splitlines() if l.strip()]
             logger.info("OCR: %d lines extracted", len(lines))
             return {"text": "\n".join(lines), "tables": [], "source": "ocr"}
