@@ -1377,6 +1377,9 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
     records = []
     lines = text.splitlines()
 
+    logger.info("Ma*Fra OCR text (%d lines):\n%s", len(lines),
+                "\n".join(f"  {i:3d}: {l}" for i, l in enumerate(lines[:60])))
+
     for raw in lines:
         line = raw.strip()
         if not line:
