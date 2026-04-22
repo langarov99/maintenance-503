@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import shutil
@@ -5,6 +6,7 @@ import signal
 import threading
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -62,9 +64,10 @@ if static_path.exists():
 
 # ── Heartbeat-based auto-shutdown ────────────────────────────────────────────
 # JS sends POST /heartbeat every 10s while the page is open.
-# If no heartbeat arrives for 20s, the server shuts down automatically.
+# If no heartbeat arrives for 120s, the server shuts down automatically.
+# Timeout is intentionally long to survive first-time model downloads (easyocr).
 _last_heartbeat: float = time.time()
-_HEARTBEAT_TIMEOUT = 20  # seconds
+_HEARTBEAT_TIMEOUT = 120  # seconds
 
 
 def _heartbeat_monitor():
@@ -163,7 +166,9 @@ async def extract(
 
     try:
         extractor = get_extractor(file_type, lang_list)
-        extracted = extractor.extract(str(tmp_path))
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            extracted = await loop.run_in_executor(pool, extractor.extract, str(tmp_path))
         mapper = get_mapper()
         records = mapper.map(extracted, supplier=supplier)
 
