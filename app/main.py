@@ -66,7 +66,7 @@ if static_path.exists():
 # JS sends POST /heartbeat every 10s while the page is open.
 # If no heartbeat arrives for 30s, the server shuts down automatically.
 _last_heartbeat: float = time.time()
-_HEARTBEAT_TIMEOUT = 30  # seconds
+_HEARTBEAT_TIMEOUT = 120  # seconds
 
 
 def _heartbeat_monitor():

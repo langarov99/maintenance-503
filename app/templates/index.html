@@ -263,6 +263,8 @@
   function sendHeartbeat() { fetch('/heartbeat', { method: 'POST' }).catch(() => {}); }
   sendHeartbeat();
   setInterval(sendHeartbeat, 10000);
+  // Browsers throttle setInterval in background tabs → send immediately on focus
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
   const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'avisa', 'maxton_design', 'mtech', 'osram', 'rezaw_plast']);
