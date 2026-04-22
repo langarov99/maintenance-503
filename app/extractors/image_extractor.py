@@ -123,24 +123,37 @@ def _filter_table_lines(lines: list, tolerance_pct: float = 0.35,
                         min_count: int = 5) -> list:
     """Keep only the longest run of evenly-spaced lines (= the table body).
 
-    Invoices have a header/footer with irregular spacing; the product table
-    rows are nearly uniform in height.  By finding the run of lines whose
-    gaps cluster tightly around the median, we isolate the table.
+    Uses the most common gap in the 20-150px range (typical invoice row height)
+    instead of the overall median.  The overall median is distorted when many
+    false-positive lines from the header/footer have small gaps (5-15px).
     """
     if len(lines) < min_count:
         return lines
 
     gaps = [lines[i + 1] - lines[i] for i in range(len(lines) - 1)]
-    median_gap = sorted(gaps)[len(gaps) // 2]
-    if median_gap < 10:
+
+    # Restrict to gap values typical for table rows (20–150 px)
+    table_gaps = [g for g in gaps if 20 <= g <= 150]
+    if table_gaps:
+        from collections import Counter
+        # Bucket to nearest 5 px to smooth noise, then pick most common
+        bucketed = [round(g / 5) * 5 for g in table_gaps]
+        best_bucket = Counter(bucketed).most_common(1)[0][0]
+        # Refine: average of actual gaps close to that bucket
+        near = [g for g in table_gaps if abs(g - best_bucket) <= 10]
+        target_gap = int(sum(near) / len(near)) if near else best_bucket
+    else:
+        target_gap = sorted(gaps)[len(gaps) // 2]
+
+    if target_gap < 10:
         return lines
 
-    tol = max(6, int(median_gap * tolerance_pct))
+    tol = max(6, int(target_gap * tolerance_pct))
 
     best_start, best_len = 0, 1
     curr_start, curr_len = 0, 1
     for i, g in enumerate(gaps):
-        if abs(g - median_gap) <= tol:
+        if abs(g - target_gap) <= tol:
             curr_len += 1
             if curr_len > best_len:
                 best_start, best_len = curr_start, curr_len
@@ -150,8 +163,8 @@ def _filter_table_lines(lines: list, tolerance_pct: float = 0.35,
 
     # +1 because we need the closing line of the last row
     result = lines[best_start: best_start + best_len + 1]
-    logger.info("Line filter: %d → %d lines (median gap %dpx, tol ±%dpx)",
-                len(lines), len(result), median_gap, tol)
+    logger.info("Line filter: %d → %d lines (target gap %dpx, tol ±%dpx)",
+                len(lines), len(result), target_gap, tol)
     return result
 
 
@@ -186,9 +199,9 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
     binary = (arr < 0.35).astype(np.float32)   # 1.0 = dark pixel
 
     # ── 2. Horizontal lines ───────────────────────────────────────────────────
-    # Use 0.28 threshold: catches thin inner row separators (not just outer borders)
-    # and still rejects faint text/decorative elements below the 0.25 floor.
-    hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.28, min_gap=20)
+    # 0.20 threshold catches thin inner row separators; _filter_table_lines
+    # removes false positives from header/footer using most-common-gap logic.
+    hlines_all = _find_grid_lines(binary, axis=0, min_dark=0.20, min_gap=15)
     logger.info("Horizontal lines (raw): %d", len(hlines_all))
 
     # ── 3. Keep only the evenly-spaced run = product table rows ──────────────
@@ -200,13 +213,13 @@ def _extract_table_cells(img: Image.Image, lang: str) -> list:
         return []
 
     # ── 4. Vertical lines — restricted to table y-range, higher threshold ────
-    # Threshold 0.40: horizontal grid lines create a ~0.30 dark-ratio "floor"
-    # across all columns inside the table area; true column separators have ≥0.80.
-    # min_gap=60: merges double-border artifacts (two thin lines per separator).
+    # Threshold 0.40: horizontal grid lines create a ~0.30 dark-ratio "floor".
+    # min_gap=150: invoice column separators are often double-ruled; pairs of
+    # lines up to ~120 px apart must be merged into one logical separator.
     y_top    = max(0, hlines[0] - 5)
     y_bottom = min(binary.shape[0], hlines[-1] + 5)
     table_strip = binary[y_top:y_bottom, :]
-    vlines = _find_grid_lines(table_strip, axis=1, min_dark=0.40, min_gap=60)
+    vlines = _find_grid_lines(table_strip, axis=1, min_dark=0.40, min_gap=150)
     logger.info("Vertical lines (table area): %d", len(vlines))
 
     if len(vlines) < 3:
