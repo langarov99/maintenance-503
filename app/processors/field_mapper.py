@@ -1416,6 +1416,17 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
                         code_pos = ti
                         break
 
+        # Pass 3: row-number merged with code, e.g. "140378" → last 4 digits "0378" → H0378
+        if not code:
+            for ti, tok in enumerate(tokens[:4]):
+                if re.match(r'^\d{5,7}$', tok):
+                    suffix = tok[-4:]
+                    candidate = 'H' + suffix
+                    if _MAFRA_CODE_RE.match(candidate):
+                        code = candidate
+                        code_pos = ti
+                        break
+
         if not code or code in seen_codes:
             continue
 

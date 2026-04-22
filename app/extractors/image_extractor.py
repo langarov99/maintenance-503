@@ -130,7 +130,9 @@ class ImageExtractor:
     def extract_from_pil(self, img: Image.Image) -> dict:
         try:
             img = _preprocess(img)
-            text = _extract_structured_text(img, self.lang_str)
+            # PSM 4: single column layout — keeps code+price on same line better
+            text = pytesseract.image_to_string(img, lang=self.lang_str,
+                                               config="--psm 4 --oem 3")
             lines = [l for l in text.splitlines() if l.strip()]
             logger.info("OCR: %d lines extracted", len(lines))
             return {"text": "\n".join(lines), "tables": [], "source": "ocr"}
