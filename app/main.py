@@ -250,15 +250,29 @@ async def extract(
                 # products whose code is unreadable but description is legible.
                 if supplier == "mafra":
                     import re as _re
+                    # Cyrillic-lookalike → Latin (OCR confuses Cyrillic with Latin)
+                    _NORM = str.maketrans({
+                        'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H',
+                        'К': 'K', 'М': 'M', 'О': 'O', 'Р': 'P', 'Т': 'T',
+                        'Х': 'X', 'а': 'a', 'е': 'e', 'о': 'o',
+                    })
+                    # Common words that appear in many products → exclude from matching
+                    _STOP = {
+                        'dual', 'spray', 'pcs', 'pro', 'and', 'the', 'for',
+                        'with', 'type', 'auto', 'car', 'ml', 'pz', 'trigger',
+                        'remover', 'cleaner', 'foam', 'shampoo',
+                    }
                     seen_codes = {r.product_code for r in records if r.product_code}
                     added = 0
                     for ocr_text in (extracted.get("text", ""),
                                      extracted.get("text2", "")):
                         for raw_line in ocr_text.splitlines():
                             line = _re.sub(r'[|\[\](){}]', ' ', raw_line)
-                            # Keep only ASCII-letter words (product name tokens)
-                            words = [w for w in line.split()
-                                     if _re.match(r'^[A-Za-z]{3,}$', w)]
+                            normalized = line.translate(_NORM)
+                            # Keep Latin-only words ≥3 chars, excluding stop words
+                            words = [w for w in normalized.split()
+                                     if _re.match(r'^[A-Za-z]{3,}$', w)
+                                     and w.lower() not in _STOP]
                             if len(words) < 2:
                                 continue
                             match = name_db.lookup_by_desc_words(words)
@@ -283,6 +297,7 @@ async def extract(
                                         rec.price = p + " EUR"
                             records.append(rec)
                             added += 1
+                            logger.info("mafra desc-match: %s → %s", words[:5], code)
                     if added:
                         logger.info("mafra: desc-match recovery added %d records", added)
 

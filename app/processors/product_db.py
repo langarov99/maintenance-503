@@ -359,18 +359,18 @@ class SupplierNameDatabase:
         return self._by_code.get(code.strip().upper())
 
     def lookup_by_desc_words(self, words: list[str],
-                              min_overlap: int = 2,
-                              min_ratio: float = 0.35) -> Optional[tuple[str, "ProductInfo"]]:
+                              min_overlap: int = 3,
+                              min_ratio: float = 0.40) -> Optional[tuple[str, "ProductInfo"]]:
         """Return (code, info) for the DB entry whose description best matches
-        the given word list.  Uses word-overlap scoring; returns None if no
-        entry clears both min_overlap and min_ratio thresholds.
+        the given word list.  Uses word-overlap scoring; requires the best match
+        to be at least 30 % better than the second-best to avoid ambiguity.
         """
         if not words or not self._loaded:
             return None
         query = {w.lower() for w in words if len(w) > 2}
         if not query:
             return None
-        best_code, best_score, best_overlap = None, 0.0, 0
+        scores: list[tuple[float, str]] = []
         for code, info in self._by_code.items():
             if not info.description:
                 continue
@@ -381,12 +381,16 @@ class SupplierNameDatabase:
             if overlap < min_overlap:
                 continue
             score = overlap / max(len(query), len(db_words))
-            if score > best_score:
-                best_score, best_overlap = score, overlap
-                best_code = code
-        if best_code and best_score >= min_ratio:
-            return best_code, self._by_code[best_code]
-        return None
+            if score >= min_ratio:
+                scores.append((score, code))
+        if not scores:
+            return None
+        scores.sort(reverse=True)
+        best_score, best_code = scores[0]
+        # Require uniqueness: best must be ≥30 % better than second
+        if len(scores) >= 2 and scores[1][0] >= best_score * 0.70:
+            return None  # ambiguous — skip
+        return best_code, self._by_code[best_code]
 
     @property
     def is_loaded(self) -> bool:
