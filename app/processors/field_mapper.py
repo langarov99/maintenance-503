@@ -2900,7 +2900,7 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
 # FROGUM
 # ---------------------------------------------------------------------------
 
-_FROGUM_LINE_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z0-9]{2}\d{6})\s+(.*)', re.UNICODE)
+_FROGUM_LINE_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z0-9]{2}\d{4,6})\s+(.*)', re.UNICODE)
 
 
 def _is_frogum_document(text: str) -> bool:
@@ -2961,7 +2961,7 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
             return str(row[ci] or "").strip()
 
         code = cell(ref_idx)
-        if not re.match(r'^[A-Z0-9]{2}\d{6}$', code):
+        if not re.match(r'^[A-Z0-9]{2}\d{4,6}$', code):
             continue
 
         name     = cell(desc_idx) if desc_idx is not None else ""
