@@ -2897,6 +2897,207 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# GEYER & HOSAJA
+# ---------------------------------------------------------------------------
+
+# Short product code on line 2 of description cell: e.g. "802/4C Car mat ..."
+_GH_CODE_RE = re.compile(r'^(\d{3}/\d[A-Z])\s+(.*)', re.UNICODE)
+
+
+def _is_geyer_hosaja_document(text: str) -> bool:
+    return bool(re.search(r'geyer.?hosaja|geter.?hosaja', text, re.IGNORECASE))
+
+
+def _gh_qty_label(n: float, unit: str) -> str:
+    n_int = int(n) if n == int(n) else n
+    if re.search(r'\bset\b', unit, re.IGNORECASE):
+        return f"{n_int} {'Комплект' if n_int == 1 else 'Комплекта'}"
+    return f"{n_int} {'Брой' if n_int == 1 else 'Броя'}"
+
+
+def _parse_geyer_hosaja_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Geyer & Hosaja invoice.
+
+    Description cell has 3 lines:
+      1. internal catalog code (01 1 99 036 21 00 1 1)  → ignored
+      2. short code + name  (802/4C Car mat OPEL CORSA D black)
+      3. order reference    (ORDER 30.03)                → ignored
+
+    Columns: Lp. | Description | Unit | Quantity | Price | Discount |
+             Price after discount | Net value | VAT rate | VAT value | Gross
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if ("nazwa" in joined or "description" in joined) and \
+           ("quantity" in joined or "ilość" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    desc_idx  = find(["nazwa", "description", "goods"]) or 0
+    unit_idx  = find(["j.miary", "unit"])
+    qty_idx   = find(["ilość", "quantity"])
+    price_idx = find(["po upuście", "upuście", "after discount"])
+    total_idx = find(["netto", "net value"])
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return str(row[ci] or "").strip()
+
+        # Description cell may have embedded newlines
+        desc_raw = cell(desc_idx)
+        code = name = None
+        for dline in desc_raw.replace('\r', '\n').split('\n'):
+            m = _GH_CODE_RE.match(dline.strip())
+            if m:
+                code = m.group(1)
+                name = m.group(2).strip()
+                break
+        if not code:
+            continue
+
+        # Unit + quantity
+        unit_raw = cell(unit_idx) or ""
+        qty_raw  = cell(qty_idx)  or ""
+        quantity = None
+        if qty_raw:
+            try:
+                qty_val  = float(qty_raw.replace(',', '.'))
+                quantity = _gh_qty_label(qty_val, unit_raw)
+            except ValueError:
+                pass
+
+        # Unit price = Price after discount
+        price_raw = cell(price_idx) or ""
+        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+
+        # Total = Net value
+        total_raw = cell(total_idx) or ""
+        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _parse_geyer_hosaja_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Geyer & Hosaja invoices.
+
+    Anchors on lines matching the short code pattern (802/4C …).
+    Searches that line and its ±3 neighbours for: unit, qty, price after
+    discount (4th decimal after unit), net value (5th decimal after unit).
+    """
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        m = _GH_CODE_RE.match(line)
+        if not m:
+            continue
+
+        code = m.group(1)
+        name = m.group(2).strip()
+        # Strip trailing order reference appended on same line
+        name = re.sub(r'\s+ORDER\s+.*$', '', name, flags=re.IGNORECASE).strip()
+
+        if code in seen:
+            continue
+
+        # Gather context: 2 lines before + current + 3 lines after
+        ctx_lines = []
+        for k in range(max(0, i - 2), min(len(lines), i + 4)):
+            ctx_lines.append(lines[k].strip())
+        search_text = " ".join(ctx_lines)
+
+        # Locate unit marker (set / pc / pcs)
+        unit_m = re.search(r'\b(set|pc\.?|pcs\.?)\b', search_text, re.IGNORECASE)
+        quantity = price = total_price = None
+
+        if unit_m:
+            unit_str   = unit_m.group(1)
+            after_unit = search_text[unit_m.end():]
+            # Decimal numbers after unit: qty, price, discount%, price_after, net, ...
+            nums = re.findall(r'\b(\d+[.,]\d+)\b', after_unit)
+            # Filter out VAT-like "0.00" duplicates and % values captured as decimals
+            if len(nums) >= 5:
+                try:
+                    qty_val  = float(nums[0].replace(',', '.'))
+                    quantity = _gh_qty_label(qty_val, unit_str)
+                    price    = nums[3].replace(',', '.') + ' EUR'   # price after discount
+                    total_price = nums[4].replace(',', '.') + ' EUR'  # net value
+                except (ValueError, IndexError):
+                    pass
+            elif len(nums) >= 2:
+                try:
+                    qty_val  = float(nums[0].replace(',', '.'))
+                    quantity = _gh_qty_label(qty_val, unit_str)
+                    total_price = nums[-1].replace(',', '.') + ' EUR'
+                except ValueError:
+                    pass
+
+        logger.info("G&H code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+
+    logger.info("Geyer & Hosaja text extraction: %d records", len(records))
+    return records
+
+
+def extract_geyer_hosaja_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Geyer & Hosaja: %d table(s) received", len(tables))
+
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
+    for table in tables:
+        for rec in _parse_geyer_hosaja_table(table):
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    text_records = _parse_geyer_hosaja_from_text(text) if text else []
+
+    records = text_records if len(text_records) > len(table_records) else table_records
+    logger.info("Geyer & Hosaja: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # PETEX
 # ---------------------------------------------------------------------------
 
@@ -3251,6 +3452,14 @@ class FieldMapper:
             records = extract_petex_products(tables, text)
             if records:
                 logger.info("Extraction method: Petex (%d records)", len(records))
+                return records
+
+        # Step 0n — Geyer & Hosaja (explicit selection or auto-detection)
+        if supplier == "geter_hosaja" or (supplier == "auto" and _is_geyer_hosaja_document(text)):
+            _specific_tried = True
+            records = extract_geyer_hosaja_products(tables, text)
+            if records:
+                logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

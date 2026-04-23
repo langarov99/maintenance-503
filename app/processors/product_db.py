@@ -414,6 +414,7 @@ _vinove_db:       Optional[SupplierNameDatabase] = None
 _gumarny_zubri_db: Optional[SupplierNameDatabase] = None
 _rigum_db:         Optional[SupplierNameDatabase] = None
 _petex_db:         Optional[SupplierNameDatabase] = None
+_gh_db:            Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -486,6 +487,14 @@ def get_gumarny_zubri_db(data_dir: str) -> SupplierNameDatabase:
         _gumarny_zubri_db = SupplierNameDatabase(data_dir, "gumarny-zubri-products.xlsx")
         _gumarny_zubri_db.load()
     return _gumarny_zubri_db
+
+
+def get_geyer_hosaja_db(data_dir: str) -> SupplierNameDatabase:
+    global _gh_db
+    if _gh_db is None:
+        _gh_db = SupplierNameDatabase(data_dir, "geyer-hosaja-products.xlsx")
+        _gh_db.load()
+    return _gh_db
 
 
 def get_petex_db(data_dir: str) -> SupplierNameDatabase:
