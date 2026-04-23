@@ -2897,6 +2897,237 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# PETEX
+# ---------------------------------------------------------------------------
+
+# Line starts with: {1-3 digit pos}  {7-9 digit article}  {rest}
+_PETEX_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d{7,9})\s+(.*)', re.UNICODE)
+
+
+def _is_petex_document(text: str) -> bool:
+    return bool(re.search(r'petex|artikelnummer|artikelbezeichnung', text, re.IGNORECASE))
+
+
+def _petex_qty_label(n: float, meh: str) -> str:
+    n_int = int(n) if n == int(n) else n
+    if re.search(r'\bsa\.?\b', meh, re.IGNORECASE):
+        return f"{n_int} {'Комплект' if n_int == 1 else 'Комплекта'}"
+    return f"{n_int} {'Брой' if n_int == 1 else 'Броя'}"
+
+
+def _petex_net_price(preis: str, rabatt_pct: str) -> str:
+    """Return unit price after discount, rounded to 2 decimal places."""
+    try:
+        p = float(preis.replace(',', '.'))
+        r = float(rabatt_pct.replace(',', '.')) / 100
+        return f"{round(p * (1 - r), 2):.2f}"
+    except ValueError:
+        return preis.replace(',', '.')
+
+
+def _parse_petex_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Petex invoice.
+
+    Columns: Pos. | Artikelnummer | Artikelbezeichnung | Menge | MEH | Preis | Rabatt | Betrag EUR
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "artikelnummer" in joined or "artikelbezeichnung" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    art_idx   = find(["artikelnummer", "artikel"])
+    desc_idx  = find(["artikelbezeichnung", "bezeichnung"])
+    qty_idx   = find(["menge"])
+    meh_idx   = find(["meh"])
+    price_idx = find(["preis"])
+    rabatt_idx= find(["rabatt"])
+    total_idx = find(["betrag"])
+
+    if art_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return str(row[ci] or "").strip()
+
+        code_raw = cell(art_idx)
+        if not re.match(r'^\d{7,9}$', code_raw):
+            continue
+
+        name = cell(desc_idx) if desc_idx is not None else ""
+
+        # Quantity + unit
+        qty_raw = cell(qty_idx)
+        meh_raw = cell(meh_idx)
+        quantity = None
+        qty_val  = None
+        if qty_raw:
+            qm = re.match(r'^(\d+)[,.](\d+)$', qty_raw)
+            if qm:
+                qty_val  = float(qty_raw.replace(',', '.'))
+                quantity = _petex_qty_label(qty_val, meh_raw)
+
+        # Net unit price = Preis × (1 - Rabatt%)
+        preis_raw  = cell(price_idx)
+        rabatt_raw = cell(rabatt_idx)
+        price = None
+        if preis_raw and re.search(r'\d', preis_raw):
+            pct_m = re.search(r'(\d+[,.]\d+)', rabatt_raw) if rabatt_raw else None
+            if pct_m:
+                price = _petex_net_price(preis_raw, pct_m.group(1)) + ' EUR'
+            else:
+                price = preis_raw.replace(',', '.') + ' EUR'
+
+        # Total (Betrag EUR)
+        total_raw = cell(total_idx)
+        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code_raw
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _parse_petex_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Petex invoices."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _PETEX_LINE_RE.match(line)
+        if not m:
+            i += 1
+            continue
+
+        code  = m.group(1)
+        after = m.group(2).strip()
+
+        if code in seen:
+            i += 1
+            continue
+
+        # Collect continuation lines until next product
+        extra_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 5:
+            nl = lines[j].strip()
+            if not nl:
+                j += 1
+                continue
+            if _PETEX_LINE_RE.match(nl):
+                break
+            extra_lines.append(nl)
+            j += 1
+
+        search_text = " ".join([line] + extra_lines)
+
+        # Build description — stop before quantity/numeric data block
+        name_parts = [after] if after else []
+        for nl in extra_lines:
+            if re.search(r'\b\d+[,.]\d{2}\s*(?:sa\.|st\.?|stk)', nl, re.IGNORECASE):
+                break
+            if re.search(r'\b\d+[,.]\d+\s*%', nl):
+                break
+            name_parts.append(nl)
+        name = " ".join(name_parts).strip()
+        # Trim trailing numeric block that pdfplumber left in description
+        name = re.sub(r'\s+\d+[,.]\d{2}\s+(?:sa\.|st\.?|stk).*$', '', name,
+                      flags=re.IGNORECASE).strip()
+
+        # Quantity: "5,00 sa." or "5,00 St."
+        qty_m = re.search(r'\b(\d+[,.]\d{2})\s*(sa\.|st\.?|stk\.?)\b',
+                          search_text, re.IGNORECASE)
+        quantity = None
+        qty_val  = None
+        if qty_m:
+            qty_val  = float(qty_m.group(1).replace(',', '.'))
+            quantity = _petex_qty_label(qty_val, qty_m.group(2))
+            after_qty = search_text[qty_m.end():]
+        else:
+            after_qty = search_text
+
+        # Preis + Rabatt% + Betrag after the unit marker
+        # Pattern: {preis}  {rabatt}%  ...  {betrag}
+        price_block = re.findall(r'\b(\d{1,6}[,.]\d{2})\b', after_qty)
+        rabatt_m    = re.search(r'\b(\d+[,.]\d+)\s*%', after_qty)
+
+        price = total_price = None
+        if price_block:
+            preis_str = price_block[0]
+            betrag_str = price_block[-1] if len(price_block) >= 2 else None
+            if rabatt_m:
+                price = _petex_net_price(preis_str, rabatt_m.group(1)) + ' EUR'
+            else:
+                price = preis_str.replace(',', '.') + ' EUR'
+            if betrag_str and betrag_str != preis_str:
+                total_price = betrag_str.replace(',', '.') + ' EUR'
+
+        logger.info("Petex code=%s qty=%s price=%s total=%s | %s",
+                    code, quantity, price, total_price, search_text[:120])
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+        i = j
+
+    logger.info("Petex text extraction: %d records", len(records))
+    return records
+
+
+def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Petex: %d table(s) received", len(tables))
+
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
+    for table in tables:
+        for rec in _parse_petex_table(table):
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    text_records = _parse_petex_from_text(text) if text else []
+
+    records = text_records if len(text_records) > len(table_records) else table_records
+    logger.info("Petex: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -3011,6 +3242,14 @@ class FieldMapper:
             records = extract_rigum_products(tables, text)
             if records:
                 logger.info("Extraction method: Rigum (%d records)", len(records))
+                return records
+
+        # Step 0m — Petex (explicit selection or auto-detection)
+        if supplier == "petex" or (supplier == "auto" and _is_petex_document(text)):
+            _specific_tried = True
+            records = extract_petex_products(tables, text)
+            if records:
+                logger.info("Extraction method: Petex (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
