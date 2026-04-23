@@ -311,9 +311,14 @@ def get_rezaw_plast_db(data_dir: str) -> RezawPlastDatabase:
 # ---------------------------------------------------------------------------
 
 class SupplierNameDatabase:
-    def __init__(self, data_dir: str, filename: str):
+    def __init__(self, data_dir: str, filename: str,
+                 desc_keywords: list | None = None):
         self.data_dir = Path(data_dir)
         self.filename = filename
+        # Caller can override to prefer a specific column (e.g. "eshop" for Rigum)
+        self._desc_keywords = desc_keywords or [
+            "описание", "description", "name", "naziv", "наименование"
+        ]
         self._by_code: dict[str, ProductInfo] = {}
         self._loaded = False
 
@@ -332,7 +337,7 @@ class SupplierNameDatabase:
                 headers, ["код", "code", "артикул", "article", "ref", "item"]
             ) or 0
             desc_idx = ProductDatabase._find_col(
-                headers, ["описание", "description", "name", "naziv", "наименование"]
+                headers, self._desc_keywords
             ) or 1
 
             col_code = df.columns[code_idx]
@@ -485,6 +490,10 @@ def get_gumarny_zubri_db(data_dir: str) -> SupplierNameDatabase:
 def get_rigum_db(data_dir: str) -> SupplierNameDatabase:
     global _rigum_db
     if _rigum_db is None:
-        _rigum_db = SupplierNameDatabase(data_dir, "products-rigum.xlsx")
+        # Prefer "Описание eShop" (detailed) over a short "Описание" column
+        _rigum_db = SupplierNameDatabase(
+            data_dir, "products-rigum.xlsx",
+            desc_keywords=["eshop", "описание", "description", "name"],
+        )
         _rigum_db.load()
     return _rigum_db
