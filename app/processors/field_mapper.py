@@ -2848,9 +2848,11 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
             quantity = None
             prices   = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', search_text)
 
+        # Use prices[1] as total — not prices[-1] which may pick up
+        # cumulative page totals that appear after the product line.
         if len(prices) >= 2:
             price       = prices[0].replace(',', '.') + ' EUR'
-            total_price = prices[-1].replace(',', '.') + ' EUR'
+            total_price = prices[1].replace(',', '.') + ' EUR'
         elif len(prices) == 1:
             price       = prices[0].replace(',', '.') + ' EUR'
             total_price = None
