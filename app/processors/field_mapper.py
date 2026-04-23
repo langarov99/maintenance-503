@@ -2897,6 +2897,204 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# FROGUM
+# ---------------------------------------------------------------------------
+
+_FROGUM_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d[A-Z]\d{6})\s+(.*)', re.UNICODE)
+
+
+def _is_frogum_document(text: str) -> bool:
+    return bool(re.search(r'frogum', text, re.IGNORECASE))
+
+
+def _frogum_qty_label(n: int, unit: str) -> str:
+    if re.search(r'\bset\b', unit, re.IGNORECASE):
+        return f"{n} {'Комплект' if n == 1 else 'Комплекта'}"
+    return f"{n} {'Брой' if n == 1 else 'Броя'}"
+
+
+def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Frogum invoice.
+
+    Columns: Item | Reference | Description | PKWiU | Unit | Q-TY |
+             VAT[%] | Net price | VAT amount | Gross value | Net value
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "reference" in joined and ("q-ty" in joined or "net price" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    ref_idx   = find(["reference"])
+    desc_idx  = find(["description"])
+    unit_idx  = find(["unit"])
+    qty_idx   = find(["q-ty", "qty", "quantity"])
+    price_idx = find(["net price"])
+    total_idx = find(["gross value", "net value"])
+
+    if ref_idx is None:
+        return []
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return str(row[ci] or "").strip()
+
+        code = cell(ref_idx)
+        if not re.match(r'^\d[A-Z]\d{6}$', code):
+            continue
+
+        name     = cell(desc_idx) if desc_idx is not None else ""
+        unit_raw = cell(unit_idx) or ""
+
+        qty_raw = cell(qty_idx) or ""
+        quantity = None
+        if qty_raw and re.match(r'^\d+$', qty_raw):
+            n = int(qty_raw)
+            quantity = _frogum_qty_label(n, unit_raw)
+
+        price_raw = cell(price_idx) or ""
+        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+
+        total_raw = cell(total_idx) or ""
+        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Frogum invoices."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _FROGUM_LINE_RE.match(line)
+        if not m:
+            i += 1
+            continue
+
+        code  = m.group(1)
+        after = m.group(2).strip()
+
+        if code in seen:
+            i += 1
+            continue
+
+        # Collect continuation lines until next product
+        extra_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 3:
+            nl = lines[j].strip()
+            if not nl:
+                j += 1
+                continue
+            if _FROGUM_LINE_RE.match(nl):
+                break
+            extra_lines.append(nl)
+            j += 1
+
+        search_text = " ".join([line] + extra_lines)
+
+        # Unit marker
+        unit_m = re.search(r'\b(set|pcs?)\b', search_text, re.IGNORECASE)
+        quantity = price = total_price = None
+
+        if unit_m:
+            unit_str   = unit_m.group(1)
+            after_unit = search_text[unit_m.end():]
+
+            # Q-TY is an integer right after unit
+            qty_m = re.search(r'\b(\d+)\b', after_unit)
+            if qty_m:
+                n        = int(qty_m.group(1))
+                quantity = _frogum_qty_label(n, unit_str)
+
+            # Decimal numbers after unit: net_price, 0.00 (VAT), gross_value, net_value
+            decimals = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
+            # decimals[0]=net_price, decimals[1]=VAT(0.00), decimals[2]=gross, decimals[3]=net
+            if len(decimals) >= 3:
+                price       = decimals[0].replace(',', '.') + ' EUR'
+                total_price = decimals[2].replace(',', '.') + ' EUR'
+            elif len(decimals) == 2:
+                price       = decimals[0].replace(',', '.') + ' EUR'
+                total_price = decimals[1].replace(',', '.') + ' EUR'
+            elif len(decimals) == 1:
+                price = decimals[0].replace(',', '.') + ' EUR'
+
+        # Build description from the 'after' part (stop before unit/numeric data)
+        name_parts = []
+        for part in [after] + extra_lines:
+            if re.search(r'\b(?:set|pcs?)\b', part, re.IGNORECASE):
+                break
+            name_parts.append(part)
+        name = " ".join(name_parts).strip()
+
+        logger.info("Frogum code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+        i = j
+
+    logger.info("Frogum text extraction: %d records", len(records))
+    return records
+
+
+def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Frogum: %d table(s) received", len(tables))
+
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
+    for table in tables:
+        for rec in _parse_frogum_table(table):
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    text_records = _parse_frogum_from_text(text) if text else []
+
+    records = text_records if len(text_records) > len(table_records) else table_records
+    logger.info("Frogum: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # GEYER & HOSAJA
 # ---------------------------------------------------------------------------
 
@@ -3446,7 +3644,15 @@ class FieldMapper:
                 logger.info("Extraction method: Rigum (%d records)", len(records))
                 return records
 
-        # Step 0m — Petex (explicit selection or auto-detection)
+        # Step 0m — Frogum (explicit selection or auto-detection)
+        if supplier == "frogum" or (supplier == "auto" and _is_frogum_document(text)):
+            _specific_tried = True
+            records = extract_frogum_products(tables, text)
+            if records:
+                logger.info("Extraction method: Frogum (%d records)", len(records))
+                return records
+
+        # Step 0n — Petex (explicit selection or auto-detection)
         if supplier == "petex" or (supplier == "auto" and _is_petex_document(text)):
             _specific_tried = True
             records = extract_petex_products(tables, text)

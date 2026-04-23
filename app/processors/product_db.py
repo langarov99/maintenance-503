@@ -415,6 +415,7 @@ _gumarny_zubri_db: Optional[SupplierNameDatabase] = None
 _rigum_db:         Optional[SupplierNameDatabase] = None
 _petex_db:         Optional[SupplierNameDatabase] = None
 _gh_db:            Optional[SupplierNameDatabase] = None
+_frogum_db:        Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -487,6 +488,14 @@ def get_gumarny_zubri_db(data_dir: str) -> SupplierNameDatabase:
         _gumarny_zubri_db = SupplierNameDatabase(data_dir, "gumarny-zubri-products.xlsx")
         _gumarny_zubri_db.load()
     return _gumarny_zubri_db
+
+
+def get_frogum_db(data_dir: str) -> SupplierNameDatabase:
+    global _frogum_db
+    if _frogum_db is None:
+        _frogum_db = SupplierNameDatabase(data_dir, "frogum-products.xlsx")
+        _frogum_db.load()
+    return _frogum_db
 
 
 def get_geyer_hosaja_db(data_dir: str) -> SupplierNameDatabase:
