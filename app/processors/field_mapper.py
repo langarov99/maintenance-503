@@ -2682,6 +2682,201 @@ def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[Product
 
 
 # ---------------------------------------------------------------------------
+# RIGUM
+# ---------------------------------------------------------------------------
+
+_RIGUM_CODE_RE = re.compile(r'^(\d{6}:[A-Z]+-[A-Z]+)\s*(.*)', re.UNICODE)
+
+
+def _is_rigum_document(text: str) -> bool:
+    return bool(re.search(r'rigum', text, re.IGNORECASE))
+
+
+def _parse_rigum_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Rigum/POHODA invoice.
+
+    Expected columns: Označení dodávky | Množství | J.cena | Sleva | € Celkem
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "označení" in joined or "množství" in joined or "j.cena" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    desc_idx  = find(["označení", "dodávky"]) or 0
+    qty_idx   = find(["množství", "množstvi"])
+    price_idx = find(["j.cena", "jednotk"])
+    total_idx = find(["celkem", "total"])
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return str(row[ci] or "").strip()
+
+        desc_raw = cell(desc_idx)
+        m = _RIGUM_CODE_RE.match(desc_raw)
+        if not m:
+            continue
+
+        code = m.group(1)
+        name = m.group(2).strip()
+
+        qty_raw = cell(qty_idx)
+        quantity = None
+        if qty_raw:
+            qm = re.match(r'^(\d+)\s*(sada|ks)\.?', qty_raw, re.IGNORECASE)
+            if qm:
+                n    = int(qm.group(1))
+                unit = qm.group(2).lower()
+                quantity = _rigum_qty_label(n, unit)
+
+        price_raw = cell(price_idx)
+        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+
+        total_raw = cell(total_idx)
+        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _rigum_qty_label(n: int, unit: str) -> str:
+    """Convert Czech unit to Bulgarian label."""
+    if unit.lower() == "sada":
+        return f"{n} {'Комплект' if n == 1 else 'Комплекта'}"
+    return f"{n} {'Брой' if n == 1 else 'Броя'}"
+
+
+def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback when pdfplumber finds no usable tables."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _RIGUM_CODE_RE.match(line)
+        if not m:
+            i += 1
+            continue
+
+        code  = m.group(1)
+        after = m.group(2).strip()
+
+        if code in seen:
+            i += 1
+            continue
+
+        # Collect continuation lines until next product code
+        extra_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 4:
+            nl = lines[j].strip()
+            if not nl:
+                j += 1
+                continue
+            if _RIGUM_CODE_RE.match(nl):
+                break
+            extra_lines.append(nl)
+            j += 1
+
+        # Build description — stop at quantity/price data
+        name_parts = [after] if after else []
+        for nl in extra_lines:
+            if re.search(r'\b\d+\s+(?:sada|ks)\b', nl, re.IGNORECASE):
+                break
+            if re.search(r'\b\d{1,6}[.,]\d{2}\b', nl):
+                break
+            name_parts.append(nl)
+        name = " ".join(name_parts).strip()
+
+        search_text = " ".join([line] + extra_lines)
+
+        # Quantity: "5 sada" / "12 ks"
+        qty_m = re.search(r'\b(\d{1,3})\s+(sada|ks)\.?\b', search_text, re.IGNORECASE)
+        if qty_m:
+            n    = int(qty_m.group(1))
+            unit = qty_m.group(2)
+            quantity    = _rigum_qty_label(n, unit)
+            after_unit  = search_text[qty_m.end():]
+            prices      = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
+        else:
+            quantity = None
+            prices   = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', search_text)
+
+        if len(prices) >= 2:
+            price       = prices[0].replace(',', '.') + ' EUR'
+            total_price = prices[-1].replace(',', '.') + ' EUR'
+        elif len(prices) == 1:
+            price       = prices[0].replace(',', '.') + ' EUR'
+            total_price = None
+        else:
+            price = total_price = None
+
+        logger.info("Rigum code=%s qty=%s price=%s total=%s | %s",
+                    code, quantity, price, total_price, search_text[:120])
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+        i = j
+
+    logger.info("Rigum text extraction: %d records", len(records))
+    return records
+
+
+def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Rigum: %d table(s) received", len(tables))
+    records: list[ProductRecord] = []
+    seen_codes: dict[str, int] = {}
+
+    for table in tables:
+        for rec in _parse_rigum_table(table):
+            code = rec.product_code
+            if code not in seen_codes:
+                seen_codes[code] = len(records)
+                records.append(rec)
+
+    if not records and text:
+        records = _parse_rigum_from_text(text)
+
+    logger.info("Rigum: %d records extracted", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -2788,6 +2983,14 @@ class FieldMapper:
             records = extract_gumarny_zubri_products(tables, text)
             if records:
                 logger.info("Extraction method: Gumarny Zubri (%d records)", len(records))
+                return records
+
+        # Step 0l — Rigum (explicit selection or auto-detection)
+        if supplier == "rigum" or (supplier == "auto" and _is_rigum_document(text)):
+            _specific_tried = True
+            records = extract_rigum_products(tables, text)
+            if records:
+                logger.info("Extraction method: Rigum (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
