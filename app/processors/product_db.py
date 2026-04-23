@@ -498,6 +498,17 @@ def get_frogum_db(data_dir: str) -> SupplierNameDatabase:
     return _frogum_db
 
 
+_gelly_plast_db: SupplierNameDatabase | None = None
+
+
+def get_gelly_plast_db(data_dir: str) -> SupplierNameDatabase:
+    global _gelly_plast_db
+    if _gelly_plast_db is None:
+        _gelly_plast_db = SupplierNameDatabase(data_dir, "gelly-plast-products.xlsx")
+        _gelly_plast_db.load()
+    return _gelly_plast_db
+
+
 def get_geyer_hosaja_db(data_dir: str) -> SupplierNameDatabase:
     global _gh_db
     if _gh_db is None:

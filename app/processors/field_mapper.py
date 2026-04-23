@@ -3110,6 +3110,196 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
 
 
 # ---------------------------------------------------------------------------
+# GELLY PLAST
+# ---------------------------------------------------------------------------
+
+_GELLY_PLAST_CODE_RE = re.compile(r'^GP\d{4,6}(?:[+\-][A-Z0-9]+)?$', re.IGNORECASE)
+
+
+def _is_gelly_plast_document(text: str) -> bool:
+    return bool(re.search(r'gelly.?plast|georgiades.*ltd|wind\s+deflectors', text, re.IGNORECASE))
+
+
+def _gelly_plast_qty_label(n: int) -> str:
+    return f"{n} {'Комплект' if n == 1 else 'Комплекта'}"
+
+
+def _parse_gelly_plast_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Gelly Plast invoice.
+
+    Columns: Code | Description | Quantity | Price per set € | Price €
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(re.sub(r'\s+', ' ', str(c or "")).lower() for c in row)
+        if "quantity" in joined and "price" in joined:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    def find_all(kw):
+        return [idx for idx, h in enumerate(headers) if kw in h]
+
+    qty_idx   = find(["quantity"])
+    price_idx = find(["per set"])
+    price_cols = find_all("price")
+    total_idx = next((i for i in price_cols if i != price_idx), None)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
+
+        code = cell(0)
+        if not _GELLY_PLAST_CODE_RE.match(code):
+            continue
+
+        name = cell(1) if len(row) > 1 else ""
+
+        qty_raw = cell(qty_idx) or ""
+        quantity = None
+        if qty_raw and re.match(r'^\d+$', qty_raw):
+            quantity = _gelly_plast_qty_label(int(qty_raw))
+
+        price_raw = cell(price_idx) or ""
+        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+
+        total_raw = cell(total_idx) or ""
+        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code.upper()
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _parse_gelly_plast_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Gelly Plast invoices."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = re.match(r'^\s*(GP\d{4,6}(?:[+\-][A-Z0-9]+)?)\s+(.*)', line, re.IGNORECASE)
+        if not m:
+            i += 1
+            continue
+
+        code  = m.group(1).upper()
+        after = m.group(2).strip()
+
+        if code in seen:
+            i += 1
+            continue
+
+        extra_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 3:
+            nl = lines[j].strip()
+            if not nl:
+                j += 1
+                continue
+            if re.match(r'^\s*GP\d{4,6}(?:[+\-][A-Z0-9]+)?\s+', nl, re.IGNORECASE):
+                break
+            extra_lines.append(nl)
+            j += 1
+
+        search_text = " ".join([after] + extra_lines)
+
+        # Numeric data (qty, unit price, total) follows the last Cyrillic character
+        cyrillic_positions = [k for k, c in enumerate(search_text) if 'Ѐ' <= c <= 'ӿ']
+        numeric_part = search_text[cyrillic_positions[-1] + 1:] if cyrillic_positions else search_text
+
+        nums = re.findall(r'\b(\d+(?:[.,]\d+)?)\b', numeric_part)
+        quantity = price = total_price = None
+        if len(nums) >= 3:
+            try:
+                n = int(float(nums[-3].replace(',', '.')))
+                quantity    = _gelly_plast_qty_label(n)
+                price       = nums[-2].replace(',', '.') + ' EUR'
+                total_price = nums[-1].replace(',', '.') + ' EUR'
+            except (ValueError, IndexError):
+                pass
+        elif len(nums) == 2:
+            price       = nums[0].replace(',', '.') + ' EUR'
+            total_price = nums[1].replace(',', '.') + ' EUR'
+
+        name = (search_text[:cyrillic_positions[-1] + 1] if cyrillic_positions else after).strip()
+
+        logger.info("GellyPlast code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+        i = j
+
+    logger.info("GellyPlast text extraction: %d records", len(records))
+    return records
+
+
+def extract_gelly_plast_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("GellyPlast: %d table(s) received", len(tables))
+
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
+    for table in tables:
+        for rec in _parse_gelly_plast_table(table):
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    text_records = _parse_gelly_plast_from_text(text) if text else []
+
+    if text_records and table_records:
+        table_by_code = {r.product_code: r for r in table_records}
+        for rec in text_records:
+            t = table_by_code.get(rec.product_code)
+            if t:
+                if not rec.price:
+                    rec.price = t.price
+                if not rec.total_price:
+                    rec.total_price = t.total_price
+                if not rec.quantity:
+                    rec.quantity = t.quantity
+        records = text_records
+    else:
+        records = table_records if table_records else text_records
+
+    logger.info("GellyPlast: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # GEYER & HOSAJA
 # ---------------------------------------------------------------------------
 
@@ -3673,6 +3863,14 @@ class FieldMapper:
             records = extract_petex_products(tables, text)
             if records:
                 logger.info("Extraction method: Petex (%d records)", len(records))
+                return records
+
+        # Step 0o — Gelly Plast (explicit selection or auto-detection)
+        if supplier == "gelly_plast" or (supplier == "auto" and _is_gelly_plast_document(text)):
+            _specific_tried = True
+            records = extract_gelly_plast_products(tables, text)
+            if records:
+                logger.info("Extraction method: Gelly Plast (%d records)", len(records))
                 return records
 
         # Step 0n — Geyer & Hosaja (explicit selection or auto-detection)
