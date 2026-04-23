@@ -3218,7 +3218,7 @@ def _parse_gelly_plast_from_text(text: str) -> list[ProductRecord]:
 
         extra_lines: list[str] = []
         j = i + 1
-        while j < len(lines) and j <= i + 3:
+        while j < len(lines) and j <= i + 5:
             nl = lines[j].strip()
             if not nl:
                 j += 1
@@ -3228,11 +3228,25 @@ def _parse_gelly_plast_from_text(text: str) -> list[ProductRecord]:
             extra_lines.append(nl)
             j += 1
 
-        search_text = " ".join([after] + extra_lines)
+        # If 'after' (part on the same line as code) contains no Cyrillic,
+        # the numeric data (qty, price, total) is in 'after'; description is
+        # in continuation lines.  Otherwise description and numbers are mixed
+        # in the full search_text — fall back to post-Cyrillic heuristic.
+        after_has_cyrillic = bool(re.search(r'[Ѐ-ӿ]', after))
 
-        # Numeric data (qty, unit price, total) follows the last Cyrillic character
-        cyrillic_positions = [k for k, c in enumerate(search_text) if 'Ѐ' <= c <= 'ӿ']
-        numeric_part = search_text[cyrillic_positions[-1] + 1:] if cyrillic_positions else search_text
+        if not after_has_cyrillic:
+            numeric_part = after
+            cyrillic_positions = []
+            for part in extra_lines:
+                cp = [k for k, c in enumerate(part) if 'Ѐ' <= c <= 'ӿ']
+                if cp:
+                    cyrillic_positions = cp  # last-found wins
+            name = " ".join(extra_lines).strip()
+        else:
+            search_text = " ".join([after] + extra_lines)
+            cyrillic_positions = [k for k, c in enumerate(search_text) if 'Ѐ' <= c <= 'ӿ']
+            numeric_part = search_text[cyrillic_positions[-1] + 1:] if cyrillic_positions else search_text
+            name = (search_text[:cyrillic_positions[-1] + 1] if cyrillic_positions else after).strip()
 
         nums = re.findall(r'\b(\d+(?:[.,]\d+)?)\b', numeric_part)
         quantity = price = total_price = None
@@ -3247,8 +3261,6 @@ def _parse_gelly_plast_from_text(text: str) -> list[ProductRecord]:
         elif len(nums) == 2:
             price       = nums[0].replace(',', '.') + ' EUR'
             total_price = nums[1].replace(',', '.') + ' EUR'
-
-        name = (search_text[:cyrillic_positions[-1] + 1] if cyrillic_positions else after).strip()
 
         logger.info("GellyPlast code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
 
@@ -3284,11 +3296,12 @@ def extract_gelly_plast_products(tables: list, text: str = "") -> list[ProductRe
         for rec in text_records:
             t = table_by_code.get(rec.product_code)
             if t:
-                if not rec.price:
+                # Table column extraction is authoritative for prices/qty
+                if t.price:
                     rec.price = t.price
-                if not rec.total_price:
+                if t.total_price:
                     rec.total_price = t.total_price
-                if not rec.quantity:
+                if t.quantity:
                     rec.quantity = t.quantity
         records = text_records
     else:
