@@ -3138,28 +3138,35 @@ def _parse_gelly_plast_table(table: list[list]) -> list[ProductRecord]:
         if "quantity" in joined and "price" in joined:
             header_idx = i
             break
-    if header_idx is None:
-        return []
 
-    headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
+    if header_idx is not None:
+        headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
 
-    def find(kws):
-        for kw in kws:
-            for idx, h in enumerate(headers):
-                if kw in h:
-                    return idx
-        return None
+        def find(kws):
+            for kw in kws:
+                for idx, h in enumerate(headers):
+                    if kw in h:
+                        return idx
+            return None
 
-    def find_all(kw):
-        return [idx for idx, h in enumerate(headers) if kw in h]
+        def find_all(kw):
+            return [idx for idx, h in enumerate(headers) if kw in h]
 
-    qty_idx   = find(["quantity"])
-    price_idx = find(["per set"])
-    price_cols = find_all("price")
-    total_idx = next((i for i in price_cols if i != price_idx), None)
+        qty_idx    = find(["quantity"])
+        price_idx  = find(["per set"])
+        price_cols = find_all("price")
+        total_idx  = next((i for i in price_cols if i != price_idx), None)
+        data_start = header_idx + 1
+    else:
+        # Continuation page — no header row; use fixed column layout
+        # Col 0: code, Col 1: description, Col 2: qty, Col 3: price per set, Col 4: total
+        qty_idx   = 2
+        price_idx = 3
+        total_idx = 4
+        data_start = 0
 
     records = []
-    for row in table[header_idx + 1:]:
+    for row in table[data_start:]:
         if not any(str(c or "").strip() for c in row):
             continue
 
@@ -3180,10 +3187,12 @@ def _parse_gelly_plast_table(table: list[list]) -> list[ProductRecord]:
             quantity = _gelly_plast_qty_label(int(qty_raw))
 
         price_raw = cell(price_idx) or ""
-        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+        price = (price_raw.replace(',', '.') + ' EUR') \
+            if price_raw and re.match(r'^\d+(?:[.,]\d+)?$', price_raw) else None
 
         total_raw = cell(total_idx) or ""
-        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+        total_price = (total_raw.replace(',', '.') + ' EUR') \
+            if total_raw and re.match(r'^\d+(?:[.,]\d+)?$', total_raw) else None
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code  = code.upper()
