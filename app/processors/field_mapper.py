@@ -996,6 +996,15 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
+        # Only treat as a real product line when the code appears at the very
+        # start (or after a row-number prefix like "4.").  Codes that appear
+        # mid-sentence in a description (e.g. "GT-LINE" in
+        # "RENAULT MEGANE 4 GT-LINE") must be skipped.
+        line_prefix = line[:m.start()].strip()
+        if line_prefix and not re.match(r'^\d{1,2}\.?\s*$', line_prefix):
+            i += 1
+            continue
+
         code = m.group(1)
         if code in seen:
             i += 1
@@ -1005,7 +1014,10 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         # puts code and name in the same cell separated by ';').
         after = line[m.end():].strip().lstrip(';').strip()
 
-        # Collect up to 4 non-product lines after the code line; skip blank lines
+        # Collect up to 5 non-product lines after the code line; skip blank lines.
+        # A line is a "new product" only when its code appears at the start —
+        # codes embedded mid-sentence in a description are consumed as extra_lines
+        # so they don't pollute `seen` and don't cause the real product to be skipped.
         extra_lines: list[str] = []
         j = i + 1
         while j < len(lines) and j <= i + 5:
@@ -1013,8 +1025,11 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             if not nl:
                 j += 1  # blank line — keep scanning, don't break
                 continue
-            if _MAXTON_CODE_TEXT_RE.search(nl):
-                break  # next product code starts here
+            mm = _MAXTON_CODE_TEXT_RE.search(nl)
+            if mm:
+                nl_prefix = nl[:mm.start()].strip()
+                if not nl_prefix or re.match(r'^\d{1,2}\.?\s*$', nl_prefix):
+                    break  # real product line — stop scanning
             extra_lines.append(nl)
             j += 1
 
@@ -1077,14 +1092,21 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         records.append(rec)
         i = j  # skip past already-consumed extra lines
 
-    # Handle shipping/freight row — no standard XX-XXXX code, price merged in PDF text
-    # e.g. "41 265,000 % 265,001SHIPPING EXPORT+WDT Wysyłka / Shipping DB Schenker"
-    for raw_line in lines:
+    # Handle shipping/freight row — no standard XX-XXXX code.
+    # In newer invoice formats the price appears on the NEXT line(s), not on the
+    # same line as "Wysyłka / Shipping", so we also check 1-2 adjacent lines.
+    for idx, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not re.search(r'\b(?:shipping|wysyłka|wyslka|freight)\b', line, re.IGNORECASE):
             continue
+        # Collect the keyword line plus up to 2 following lines
+        search_lines = [line]
+        for offset in (1, 2):
+            if idx + offset < len(lines):
+                search_lines.append(lines[idx + offset].strip())
+        combined = " ".join(search_lines)
         # Lenient price regex — no word boundaries to handle merged digits
-        prices = list(dict.fromkeys(re.findall(r'(\d{1,6}[.,]\d{2})', line)))
+        prices = list(dict.fromkeys(re.findall(r'(\d{1,6}[.,]\d{2})', combined)))
         if not prices:
             continue
         price_val = prices[-1].replace(',', '.') + ' EUR'
