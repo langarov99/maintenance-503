@@ -407,6 +407,7 @@ _amal_plast_db:   Optional[SupplierNameDatabase] = None
 _car_passion_db:  Optional[SupplierNameDatabase] = None
 _vinove_db:       Optional[SupplierNameDatabase] = None
 _gumarny_zubri_db: Optional[SupplierNameDatabase] = None
+_rigum_db:         Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -479,3 +480,11 @@ def get_gumarny_zubri_db(data_dir: str) -> SupplierNameDatabase:
         _gumarny_zubri_db = SupplierNameDatabase(data_dir, "gumarny-zubri-products.xlsx")
         _gumarny_zubri_db.load()
     return _gumarny_zubri_db
+
+
+def get_rigum_db(data_dir: str) -> SupplierNameDatabase:
+    global _rigum_db
+    if _rigum_db is None:
+        _rigum_db = SupplierNameDatabase(data_dir, "products-rigum.xlsx")
+        _rigum_db.load()
+    return _rigum_db

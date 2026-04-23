@@ -2685,7 +2685,8 @@ def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[Product
 # RIGUM
 # ---------------------------------------------------------------------------
 
-_RIGUM_CODE_RE = re.compile(r'^(\d{6}:[A-Z]+-[A-Z]+)\s*(.*)', re.UNICODE)
+# Group 1 = 6-digit product code; group 2 = rest of line (description on invoice)
+_RIGUM_CODE_RE = re.compile(r'^(\d{6}):[A-Z0-9]+(?:-[A-Z]+)?\s*(.*)', re.UNICODE)
 
 
 def _is_rigum_document(text: str) -> bool:
