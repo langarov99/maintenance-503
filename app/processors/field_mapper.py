@@ -985,8 +985,8 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
 
 def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
     """Text-based fallback when pdfplumber finds no usable tables."""
-    records = []
-    seen: set[str] = set()
+    records: list[ProductRecord] = []
+    seen: dict[str, int] = {}  # code → index in records (for duplicate merging)
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -1006,9 +1006,6 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             continue
 
         code = m.group(1)
-        if code in seen:
-            i += 1
-            continue
 
         # Description: text after the code; strip leading ';' (new invoice format
         # puts code and name in the same cell separated by ';').
@@ -1081,15 +1078,30 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         logger.info("Maxton code=%s qty=%s price=%s total=%s | search: %s",
                     code, quantity, price, total_price, search_text[:160])
 
-        rec = ProductRecord(extraction_method="table")
-        rec.product_code = code
-        rec.product_name = name[:120] if name else None
-        rec.quantity     = quantity
-        rec.price        = price
-        rec.total_price  = total_price
+        if code in seen:
+            # Merge duplicate: add quantities and total prices, keep unit price
+            existing = records[seen[code]]
+            if quantity and existing.quantity:
+                existing_n = int(re.search(r'\d+', existing.quantity).group())
+                new_n      = int(re.search(r'\d+', quantity).group())
+                merged_n   = existing_n + new_n
+                existing.quantity = f"{merged_n} {'Брой' if merged_n == 1 else 'Броя'}"
+            if total_price and existing.total_price:
+                ep = float(existing.total_price.replace(' EUR', '').replace(',', '.'))
+                np = float(total_price.replace(' EUR', '').replace(',', '.'))
+                existing.total_price = f"{ep + np:.2f} EUR"
+            logger.info("Maxton: merged duplicate %s → qty=%s total=%s",
+                        code, existing.quantity, existing.total_price)
+        else:
+            rec = ProductRecord(extraction_method="table")
+            rec.product_code = code
+            rec.product_name = name[:120] if name else None
+            rec.quantity     = quantity
+            rec.price        = price
+            rec.total_price  = total_price
+            seen[code]       = len(records)
+            records.append(rec)
 
-        seen.add(code)
-        records.append(rec)
         i = j  # skip past already-consumed extra lines
 
     # Handle shipping/freight row — no standard XX-XXXX code.
