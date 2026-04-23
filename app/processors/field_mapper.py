@@ -2741,20 +2741,36 @@ def _parse_rigum_table(table: list[list]) -> list[ProductRecord]:
         code = m.group(1)
         name = m.group(2).strip()
 
+        quantity = total_price = price = None
+
+        # Try separate columns first
         qty_raw = cell(qty_idx)
-        quantity = None
         if qty_raw:
             qm = re.match(r'^(\d+)\s*(sada|ks)\.?', qty_raw, re.IGNORECASE)
             if qm:
-                n    = int(qm.group(1))
-                unit = qm.group(2).lower()
-                quantity = _rigum_qty_label(n, unit)
+                quantity = _rigum_qty_label(int(qm.group(1)), qm.group(2))
 
         price_raw = cell(price_idx)
-        price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
+        if price_raw and re.search(r'\d', price_raw):
+            price = price_raw.replace(',', '.') + ' EUR'
 
         total_raw = cell(total_idx)
-        total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+        if total_raw and re.search(r'\d', total_raw):
+            total_price = total_raw.replace(',', '.') + ' EUR'
+
+        # When all numeric data is merged into the description cell, parse it out
+        if quantity is None and price is None:
+            qty_m = re.search(r'\b(\d{1,3})\s+(sada|ks)\.?\b', name, re.IGNORECASE)
+            if qty_m:
+                quantity   = _rigum_qty_label(int(qty_m.group(1)), qty_m.group(2))
+                after_unit = name[qty_m.end():]
+                prices     = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
+                name       = name[:qty_m.start()].strip()
+                if len(prices) >= 2:
+                    price       = prices[0].replace(',', '.') + ' EUR'
+                    total_price = prices[-1].replace(',', '.') + ' EUR'
+                elif len(prices) == 1:
+                    price = prices[0].replace(',', '.') + ' EUR'
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code  = code
@@ -2859,20 +2875,21 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
 
 def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Rigum: %d table(s) received", len(tables))
-    records: list[ProductRecord] = []
-    seen_codes: dict[str, int] = {}
 
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
     for table in tables:
         for rec in _parse_rigum_table(table):
-            code = rec.product_code
-            if code not in seen_codes:
-                seen_codes[code] = len(records)
-                records.append(rec)
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
 
-    if not records and text:
-        records = _parse_rigum_from_text(text)
+    text_records = _parse_rigum_from_text(text) if text else []
 
-    logger.info("Rigum: %d records extracted", len(records))
+    # Always prefer whichever source yields more records
+    records = text_records if len(text_records) > len(table_records) else table_records
+    logger.info("Rigum: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
     return records
 
 
