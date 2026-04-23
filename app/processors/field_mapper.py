@@ -2910,7 +2910,7 @@ def _is_petex_document(text: str) -> bool:
 
 def _petex_qty_label(n: float, meh: str) -> str:
     n_int = int(n) if n == int(n) else n
-    if re.search(r'\bsa\.?\b', meh, re.IGNORECASE):
+    if re.search(r'\bsa\.?', meh, re.IGNORECASE):
         return f"{n_int} {'Комплект' if n_int == 1 else 'Комплекта'}"
     return f"{n_int} {'Брой' if n_int == 1 else 'Броя'}"
 
@@ -3064,7 +3064,8 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
                       flags=re.IGNORECASE).strip()
 
         # Quantity: "5,00 sa." or "5,00 St."
-        qty_m = re.search(r'\b(\d+[,.]\d{2})\s*(sa\.|st\.?|stk\.?)\b',
+        # No trailing \b — the dot in "sa." is non-word so \b would fail there.
+        qty_m = re.search(r'\b(\d+[,.]\d{2})\s*(sa\.|st\.|stk\.?)(?=\s|$)',
                           search_text, re.IGNORECASE)
         quantity = None
         qty_val  = None
