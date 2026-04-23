@@ -1005,16 +1005,18 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         # puts code and name in the same cell separated by ';').
         after = line[m.end():].strip().lstrip(';').strip()
 
-        # Collect up to 3 continuation lines that don't start a new product
+        # Collect up to 4 non-product lines after the code line; skip blank lines
         extra_lines: list[str] = []
         j = i + 1
-        while j < len(lines) and j <= i + 3:
+        while j < len(lines) and j <= i + 5:
             nl = lines[j].strip()
-            if nl and not _MAXTON_CODE_TEXT_RE.search(nl):
-                extra_lines.append(nl)
-                j += 1
-            else:
-                break
+            if not nl:
+                j += 1  # blank line — keep scanning, don't break
+                continue
+            if _MAXTON_CODE_TEXT_RE.search(nl):
+                break  # next product code starts here
+            extra_lines.append(nl)
+            j += 1
 
         # Build description from the 'after' part; stop before any data line
         name_parts = [after] if after else []
@@ -1073,7 +1075,7 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
 
         seen.add(code)
         records.append(rec)
-        i += 1
+        i = j  # skip past already-consumed extra lines
 
     # Handle shipping/freight row — no standard XX-XXXX code, price merged in PDF text
     # e.g. "41 265,000 % 265,001SHIPPING EXPORT+WDT Wysyłka / Shipping DB Schenker"
