@@ -1005,10 +1005,10 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         # puts code and name in the same cell separated by ';').
         after = line[m.end():].strip().lstrip(';').strip()
 
-        # Collect up to 2 continuation lines that don't start a new product
+        # Collect up to 3 continuation lines that don't start a new product
         extra_lines: list[str] = []
         j = i + 1
-        while j < len(lines) and j <= i + 2:
+        while j < len(lines) and j <= i + 3:
             nl = lines[j].strip()
             if nl and not _MAXTON_CODE_TEXT_RE.search(nl):
                 extra_lines.append(nl)
@@ -1019,15 +1019,15 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         # Build description from the 'after' part; stop before any data line
         name_parts = [after] if after else []
         for nl in extra_lines:
-            if re.search(r'\b\d+\s*(?:szt|kpl)\b', nl, re.IGNORECASE):
+            if re.search(r'\b\d+\s*(?:szt|kpl)\.?\b', nl, re.IGNORECASE):
                 break
-            if re.search(r'\b\d{1,6}[,]\d{2}\b', nl):
+            if re.search(r'\b\d{1,6}[.,]\d{2}\b', nl):
                 break
             name_parts.append(nl)
 
         name = " ".join(name_parts).strip()
         # Strip trailing quantity/price block (old single-line format)
-        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\b.*$', '', name, flags=re.IGNORECASE).strip()
+        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\.?\b.*$', '', name, flags=re.IGNORECASE).strip()
         # Strip trailing customs/PKWiU code (e.g. " 29.32") from new format
         name = re.sub(r'\s+\d{2,3}\.\d{2}\s*$', '', name).strip()
 
@@ -1039,24 +1039,30 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         # Search current line + continuation lines for numeric data
         search_text = " ".join([line] + extra_lines)
 
-        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', search_text, re.IGNORECASE)
+        # Quantity: find "N szt" or "N kpl" (kpl. with trailing dot also accepted)
+        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\.?\b', search_text, re.IGNORECASE)
         if qty_m:
             n = int(qty_m.group(1))
             quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+            # Prices appear AFTER the unit — PKWiU customs code (e.g. 29.32) is before
+            after_unit = search_text[qty_m.end():]
+            prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
         else:
             quantity = None
+            prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', search_text)
 
-        # Use comma-decimal prices only to exclude dot-decimal customs codes (e.g. 29.32)
-        prices = re.findall(r'\b(\d{1,6}[,]\d{2})\b', search_text)
         if len(prices) >= 2:
-            price       = prices[-2].replace(',', '.') + ' EUR'
+            price       = prices[0].replace(',', '.') + ' EUR'
             total_price = prices[-1].replace(',', '.') + ' EUR'
         elif len(prices) == 1:
-            price       = prices[-1].replace(',', '.') + ' EUR'
+            price       = prices[0].replace(',', '.') + ' EUR'
             total_price = None
         else:
             price       = None
             total_price = None
+
+        logger.info("Maxton code=%s qty=%s price=%s total=%s | search: %s",
+                    code, quantity, price, total_price, search_text[:160])
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
