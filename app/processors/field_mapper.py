@@ -2924,14 +2924,14 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
 
     header_idx = None
     for i, row in enumerate(table):
-        joined = " ".join(str(c or "").lower() for c in row)
+        joined = " ".join(re.sub(r'\s+', ' ', str(c or "")).lower() for c in row)
         if "reference" in joined and ("q-ty" in joined or "net price" in joined):
             header_idx = i
             break
     if header_idx is None:
         return []
 
-    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
 
     def find(kws):
         for kw in kws:
@@ -2945,7 +2945,7 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
     unit_idx  = find(["unit"])
     qty_idx   = find(["q-ty", "qty", "quantity"])
     price_idx = find(["net price"])
-    total_idx = find(["gross value", "net value"])
+    total_idx = find(["net value", "gross value"])
 
     if ref_idx is None:
         return []
@@ -3088,7 +3088,22 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
 
     text_records = _parse_frogum_from_text(text) if text else []
 
-    records = text_records if len(text_records) > len(table_records) else table_records
+    # Use text for full code coverage; fill missing prices/qty from table
+    if text_records and table_records:
+        table_by_code = {r.product_code: r for r in table_records}
+        for rec in text_records:
+            t = table_by_code.get(rec.product_code)
+            if t:
+                if not rec.price:
+                    rec.price = t.price
+                if not rec.total_price:
+                    rec.total_price = t.total_price
+                if not rec.quantity:
+                    rec.quantity = t.quantity
+        records = text_records
+    else:
+        records = table_records if table_records else text_records
+
     logger.info("Frogum: %d records (table=%d text=%d)",
                 len(records), len(table_records), len(text_records))
     return records
