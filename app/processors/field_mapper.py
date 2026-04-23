@@ -1001,36 +1001,53 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        # Description: text after the code; strip trailing 'N szt|kpl 0% price price'
-        after = line[m.end():].strip()
-        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\b.*$', '', after, flags=re.IGNORECASE).strip()
-        if not name:
-            name = after
+        # Description: text after the code; strip leading ';' (new invoice format
+        # puts code and name in the same cell separated by ';').
+        after = line[m.end():].strip().lstrip(';').strip()
 
-        # Append wrapped continuation lines (e.g. "V8 PACK", "AMG")
-        if i + 1 < len(lines):
-            next_line = lines[i + 1].strip()
-            if (next_line
-                    and not _MAXTON_CODE_TEXT_RE.search(next_line)
-                    and not re.match(r'^\d+\s+[A-Z]{2}-', next_line)
-                    and not re.search(r'\b\d+\s+(?:szt|kpl)\b', next_line, re.IGNORECASE)):
-                name = (name + " " + next_line).strip()
+        # Collect up to 2 continuation lines that don't start a new product
+        extra_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 2:
+            nl = lines[j].strip()
+            if nl and not _MAXTON_CODE_TEXT_RE.search(nl):
+                extra_lines.append(nl)
+                j += 1
+            else:
+                break
+
+        # Build description from the 'after' part; stop before any data line
+        name_parts = [after] if after else []
+        for nl in extra_lines:
+            if re.search(r'\b\d+\s*(?:szt|kpl)\b', nl, re.IGNORECASE):
+                break
+            if re.search(r'\b\d{1,6}[,]\d{2}\b', nl):
+                break
+            name_parts.append(nl)
+
+        name = " ".join(name_parts).strip()
+        # Strip trailing quantity/price block (old single-line format)
+        name = re.sub(r'\s+\d+\s+(?:szt|kpl)\b.*$', '', name, flags=re.IGNORECASE).strip()
+        # Strip trailing customs/PKWiU code (e.g. " 29.32") from new format
+        name = re.sub(r'\s+\d{2,3}\.\d{2}\s*$', '', name).strip()
 
         # Skip rows where description is a column header
         if re.search(r'\b(?:nazwa|ilosc|quantity|netto|brutto|lp\.?)\b', name, re.IGNORECASE):
             i += 1
             continue
 
-        # Quantity with Bulgarian unit label
-        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', line, re.IGNORECASE)
+        # Search current line + continuation lines for numeric data
+        search_text = " ".join([line] + extra_lines)
+
+        qty_m = re.search(r'\b(\d{1,4})\s*(?:szt|kpl)\b', search_text, re.IGNORECASE)
         if qty_m:
             n = int(qty_m.group(1))
             quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
         else:
             quantity = None
 
-        # Two prices on each line: Cena netto EUR (unit) and Wartość netto EUR (total)
-        prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', line)
+        # Use comma-decimal prices only to exclude dot-decimal customs codes (e.g. 29.32)
+        prices = re.findall(r'\b(\d{1,6}[,]\d{2})\b', search_text)
         if len(prices) >= 2:
             price       = prices[-2].replace(',', '.') + ' EUR'
             total_price = prices[-1].replace(',', '.') + ' EUR'
