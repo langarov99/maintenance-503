@@ -3398,11 +3398,23 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
                 return ""
             return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
 
-        code = cell(code_idx)
+        # Code cell may contain both code and description separated by \n
+        raw_code_cell = str(row[code_idx] or "") if code_idx is not None and code_idx < len(row) else ""
+        code_parts = [p.strip() for p in raw_code_cell.split('\n') if p.strip()]
+        code = code_parts[0] if code_parts else ""
+
         if not code or not re.match(r'^1-', code, re.IGNORECASE):
             continue
 
-        name  = cell(desc_idx)
+        # Description: prefer dedicated column; fall back to embedded part
+        desc_raw = str(row[desc_idx] or "").strip() if desc_idx is not None and desc_idx < len(row) else ""
+        if desc_raw:
+            name = re.sub(r'\s+', ' ', desc_raw).strip()
+        elif len(code_parts) > 1:
+            name = ' '.join(code_parts[1:])
+        else:
+            name = ""
+
         um    = cell(um_idx)
 
         quantity = None
