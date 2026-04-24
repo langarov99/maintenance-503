@@ -269,29 +269,38 @@ async def extract(
                 # catalog_str = merged string with "1-" stripped, e.g. "HA1/E STAR LOCK..."
                 catalog_str = original[2:]
 
-                # Find longest catalog key that is a word-boundary prefix of catalog_str
+                # Find longest catalog key that is a word-boundary prefix.
+                # Some products are stored WITH "1-" in the catalog (racks),
+                # others WITHOUT (bolts/nuts: HA1/E, B12 …).  Try both.
                 matched_key = None
+                matched_remainder = ""
                 for ck in cat_keys:
-                    if not catalog_str.upper().startswith(ck.upper()):
-                        continue
-                    after = catalog_str[len(ck):]
-                    if after == "" or after[0] in (" ", "/"):
-                        matched_key = ck
+                    for candidate in (original, catalog_str):
+                        if not candidate.upper().startswith(ck.upper()):
+                            continue
+                        after = candidate[len(ck):]
+                        if after == "" or after[0] in (" ", "/"):
+                            matched_key = ck
+                            matched_remainder = after.strip()
+                            break
+                    if matched_key:
                         break
 
                 if matched_key:
-                    remainder = catalog_str[len(matched_key):].strip()
-                    if remainder:
-                        rec.product_name = remainder
-                    rec.product_code = matched_key
+                    if matched_remainder:
+                        rec.product_name = matched_remainder
+                    # Use the internal_code from DB (preserves Excel casing)
                     if farad_db.is_loaded:
                         info = farad_db.lookup(matched_key)
+                        rec.product_code = (info.internal_code
+                                            if info and info.internal_code
+                                            else matched_key)
                         if info and info.description:
                             rec.product_name = info.description
+                    else:
+                        rec.product_code = matched_key
                 else:
-                    # No catalog key matched — product code stays as the full
-                    # invoice string (e.g. "1-92041 KIT HILO" for roof racks).
-                    # Still attempt a name lookup via the regex short key.
+                    # No catalog match — keep original full invoice code
                     short_key = m.group(1)
                     if farad_db.is_loaded:
                         info = farad_db.lookup(short_key)
