@@ -248,16 +248,20 @@ async def extract(
                 if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
                     rec.product_code = "GZ-" + rec.product_code
 
-        # Farad: pdfplumber merges Item/Articolo and Description into one cell
-        # separated by a plain space (no \n).  Use catalog keys (sorted longest-
-        # first) as prefix anchors to split code from description.
-        # LOCKY products use the short key (B64, D57) — the catalog stores them
-        # that way; all other products keep their full invoice code.
+        # Farad: pdfplumber (and the text parser) merges code + Italian description
+        # into one field because the PDF columns run together.
+        #
+        # Split strategy (in order):
+        #  1. Try longest catalog key that is a prefix of the merged string.
+        #  2. Fallback: regex extracts `1-<ALNUM>[/<ALNUM>]` as the clean code.
+        #     LOCKY products keep the short key (B64, D57); all others keep the
+        #     full `1-<ALNUM>` form.  Everything after the clean code becomes the
+        #     Italian description fallback when the product is not in the catalog.
         if supplier == "farad":
             import re as _re
-            _farad_key_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
+            _farad_code_re = _re.compile(r'^(1-[A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
-            # Build prefix-sorted key list once
+            # Sort catalog keys longest-first so the most specific prefix wins
             cat_keys = (sorted(farad_db._by_code.keys(), key=len, reverse=True)
                         if farad_db.is_loaded else [])
             for rec in records:
@@ -266,7 +270,7 @@ async def extract(
                 original = rec.product_code
                 is_locky = bool(_re.search(r'\bLOCKY\b', original, _re.IGNORECASE))
 
-                # Find longest catalog key that is a prefix of the merged string
+                # 1. Catalog-prefix match
                 matched_key = None
                 for ck in cat_keys:
                     if original.upper().startswith(ck.upper()):
@@ -275,8 +279,6 @@ async def extract(
 
                 if matched_key:
                     remainder = original[len(matched_key):].strip()
-                    # Always set remainder — overrides any stale "NR" value that
-                    # leaks in when pdfplumber merges the Um column into desc_idx
                     if remainder:
                         rec.product_name = remainder
                     rec.product_code = matched_key
@@ -285,15 +287,26 @@ async def extract(
                         if info and info.description:
                             rec.product_name = info.description
                 else:
-                    # Catalog key not found — LOCKY gets short code, others unchanged
-                    m = _farad_key_re.match(original)
+                    # 2. Regex fallback — always clean the code for every product
+                    m = _farad_code_re.match(original)
                     if m:
-                        short_key = m.group(1)
+                        full_code = m.group(1)          # e.g. "1-90632" or "1-AC1/E"
+                        short_key = full_code[2:]        # without "1-": "90632", "AC1/E"
+                        remainder = original[len(full_code):].strip()
+
                         if is_locky:
                             rec.product_code = short_key
+                        else:
+                            rec.product_code = full_code
+
+                        # Italian description as name fallback
+                        if remainder:
+                            rec.product_name = remainder
+
                         if farad_db.is_loaded:
-                            lookup = short_key if is_locky else original
-                            info = farad_db.lookup(lookup) or farad_db.lookup(short_key)
+                            lookup_key = short_key if is_locky else full_code
+                            info = (farad_db.lookup(lookup_key)
+                                    or farad_db.lookup(short_key))
                             if info and info.description:
                                 rec.product_name = info.description
 
