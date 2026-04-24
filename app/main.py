@@ -258,7 +258,7 @@ async def extract(
             _farad_key_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
             # Build prefix-sorted key list once
-            cat_keys = (sorted(farad_db._data.keys(), key=len, reverse=True)
+            cat_keys = (sorted(farad_db._by_code.keys(), key=len, reverse=True)
                         if farad_db.is_loaded else [])
             for rec in records:
                 if not rec.product_code:
