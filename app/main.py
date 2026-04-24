@@ -289,12 +289,10 @@ async def extract(
                         if info and info.description:
                             rec.product_name = info.description
                 else:
-                    # No catalog key matched — fall back to regex short key
-                    short_key = m.group(1)          # e.g. "HA1/E", "90632"
-                    remainder = catalog_str[len(short_key):].strip()
-                    rec.product_code = short_key
-                    if remainder:
-                        rec.product_name = remainder
+                    # No catalog key matched — product code stays as the full
+                    # invoice string (e.g. "1-92041 KIT HILO" for roof racks).
+                    # Still attempt a name lookup via the regex short key.
+                    short_key = m.group(1)
                     if farad_db.is_loaded:
                         info = farad_db.lookup(short_key)
                         if info and info.description:
