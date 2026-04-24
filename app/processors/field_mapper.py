@@ -3322,6 +3322,223 @@ def extract_gelly_plast_products(tables: list, text: str = "") -> list[ProductRe
 
 
 # ---------------------------------------------------------------------------
+# FARAD (Evolution SRL)
+# ---------------------------------------------------------------------------
+
+def _is_farad_document(text: str) -> bool:
+    return bool(re.search(r'evolution\s+srl|articolo.*imponibile|imponibile.*articolo',
+                          text, re.IGNORECASE))
+
+
+def _farad_num(s: str) -> str | None:
+    """Italian decimal format: 1.202,04 → 1202.04"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    converted = s.replace('.', '').replace(',', '.')
+    try:
+        return f"{float(converted):.2f}"
+    except ValueError:
+        return None
+
+
+def _farad_qty_label(n: int, um: str) -> str:
+    if re.match(r'^C\.?$', um.strip(), re.IGNORECASE):
+        return f"{n} {'Комплект' if n == 1 else 'Комплекта'}"
+    return f"{n} {'Брой' if n == 1 else 'Броя'}"
+
+
+def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Farad/Evolution SRL invoice.
+
+    Columns: Item/Articolo | Description | Um | Qty | Unit Price | Disc. | Net Price | Amount
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(re.sub(r'\s+', ' ', str(c or "")).lower() for c in row)
+        if ("articolo" in joined or "item" in joined) and \
+                ("qty" in joined or "imponibile" in joined or "netto" in joined):
+            header_idx = i
+            break
+
+    if header_idx is not None:
+        headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip()
+                   for c in table[header_idx]]
+
+        def find(kws):
+            for kw in kws:
+                for idx, h in enumerate(headers):
+                    if kw in h:
+                        return idx
+            return None
+
+        code_idx  = find(["articolo", "item"])
+        desc_idx  = find(["description", "descrizione"])
+        um_idx    = find(["um"])
+        qty_idx   = find(["qty", "quantit"])
+        price_idx = find(["netto", "net price"])
+        total_idx = find(["imponibile", "amount"])
+        data_start = header_idx + 1
+    else:
+        # Fixed column layout (continuation pages)
+        code_idx, desc_idx, um_idx = 0, 1, 2
+        qty_idx, price_idx, total_idx = 3, 6, 7
+        data_start = 0
+
+    records = []
+    for row in table[data_start:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
+
+        code = cell(code_idx)
+        if not code or not re.match(r'^1-', code, re.IGNORECASE):
+            continue
+
+        name  = cell(desc_idx)
+        um    = cell(um_idx)
+
+        quantity = None
+        qty_raw = cell(qty_idx)
+        qty_val = _farad_num(qty_raw)
+        if qty_val:
+            try:
+                n = int(float(qty_val))
+                quantity = _farad_qty_label(n, um)
+            except ValueError:
+                pass
+
+        p = _farad_num(cell(price_idx))
+        price = (p + ' EUR') if p is not None else None
+
+        t = _farad_num(cell(total_idx))
+        total_price = (t + ' EUR') if t is not None else None
+
+        logger.info("Farad code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def _parse_farad_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Farad/Evolution SRL invoices."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # Line starts with 1- code, then description, then UM, then numbers
+        m = re.match(r'^(1-\S+(?:\s+\S+){0,5}?)\s+(NR|C\.?)\s+([\d,]+)', line, re.IGNORECASE)
+        if not m:
+            i += 1
+            continue
+
+        code    = m.group(1).strip()
+        um      = m.group(2)
+        qty_raw = m.group(3)
+
+        if code in seen:
+            i += 1
+            continue
+
+        qty_val = _farad_num(qty_raw)
+        quantity = None
+        if qty_val:
+            try:
+                n = int(float(qty_val))
+                quantity = _farad_qty_label(n, um)
+            except ValueError:
+                pass
+
+        # Numbers after qty: unit_price disc net_price amount
+        # Discount is like "60+10%" — skip non-pure-decimal tokens
+        rest = line[m.end():].strip()
+        decimal_nums = [_farad_num(tok) for tok in re.split(r'\s+', rest)
+                        if re.match(r'^[\d.,]+$', tok)]
+        decimal_nums = [v for v in decimal_nums if v is not None]
+
+        price = total_price = None
+        if len(decimal_nums) >= 2:
+            price       = decimal_nums[-2] + ' EUR'
+            total_price = decimal_nums[-1] + ' EUR'
+        elif len(decimal_nums) == 1:
+            total_price = decimal_nums[0] + ' EUR'
+
+        # Description: collect continuation lines before next 1- code
+        name_parts: list[str] = []
+        j = i + 1
+        while j < len(lines) and j <= i + 2:
+            nl = lines[j].strip()
+            if not nl or re.match(r'^1-', nl, re.IGNORECASE):
+                break
+            name_parts.append(nl)
+            j += 1
+
+        name = " ".join(name_parts).strip()
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        seen.add(code)
+        records.append(rec)
+        i += 1
+
+    logger.info("Farad text extraction: %d records", len(records))
+    return records
+
+
+def extract_farad_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Farad: %d table(s) received", len(tables))
+
+    table_records: list[ProductRecord] = []
+    seen: set[str] = set()
+    for table in tables:
+        for rec in _parse_farad_table(table):
+            if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    text_records = _parse_farad_from_text(text) if text else []
+
+    if text_records and table_records:
+        table_by_code = {r.product_code: r for r in table_records}
+        for rec in text_records:
+            t = table_by_code.get(rec.product_code)
+            if t:
+                if t.price:
+                    rec.price = t.price
+                if t.total_price:
+                    rec.total_price = t.total_price
+                if t.quantity:
+                    rec.quantity = t.quantity
+        records = text_records
+    else:
+        records = table_records if table_records else text_records
+
+    logger.info("Farad: %d records (table=%d text=%d)",
+                len(records), len(table_records), len(text_records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # GEYER & HOSAJA
 # ---------------------------------------------------------------------------
 
@@ -3893,6 +4110,14 @@ class FieldMapper:
             records = extract_gelly_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Gelly Plast (%d records)", len(records))
+                return records
+
+        # Step 0p — Farad / Evolution SRL (explicit selection or auto-detection)
+        if supplier == "farad" or (supplier == "auto" and _is_farad_document(text)):
+            _specific_tried = True
+            records = extract_farad_products(tables, text)
+            if records:
+                logger.info("Extraction method: Farad (%d records)", len(records))
                 return records
 
         # Step 0n — Geyer & Hosaja (explicit selection or auto-detection)

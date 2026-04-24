@@ -509,6 +509,17 @@ def get_gelly_plast_db(data_dir: str) -> SupplierNameDatabase:
     return _gelly_plast_db
 
 
+_farad_db: SupplierNameDatabase | None = None
+
+
+def get_farad_db(data_dir: str) -> SupplierNameDatabase:
+    global _farad_db
+    if _farad_db is None:
+        _farad_db = SupplierNameDatabase(data_dir, "farad-products.xlsx")
+        _farad_db.load()
+    return _farad_db
+
+
 def get_geyer_hosaja_db(data_dir: str) -> SupplierNameDatabase:
     global _gh_db
     if _gh_db is None:
