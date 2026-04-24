@@ -248,27 +248,54 @@ async def extract(
                 if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
                     rec.product_code = "GZ-" + rec.product_code
 
-        # Farad: LOCKY products use a short code (B64, D57…); others keep the
-        # full invoice code.  In both cases try to enrich the name from DB.
+        # Farad: pdfplumber merges Item/Articolo and Description into one cell
+        # separated by a plain space (no \n).  Use catalog keys (sorted longest-
+        # first) as prefix anchors to split code from description.
+        # LOCKY products use the short key (B64, D57) — the catalog stores them
+        # that way; all other products keep their full invoice code.
         if supplier == "farad":
             import re as _re
             _farad_key_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
+            # Build prefix-sorted key list once
+            cat_keys = (sorted(farad_db._data.keys(), key=len, reverse=True)
+                        if farad_db.is_loaded else [])
             for rec in records:
                 if not rec.product_code:
                     continue
-                m = _farad_key_re.match(rec.product_code)
-                if not m:
-                    continue
-                short_key  = m.group(1)
-                is_locky   = bool(_re.search(r'\bLOCKY\b', rec.product_code, _re.IGNORECASE))
-                lookup_key = short_key if is_locky else rec.product_code
-                if is_locky:
-                    rec.product_code = short_key
-                if farad_db.is_loaded:
-                    info = farad_db.lookup(lookup_key) or farad_db.lookup(short_key)
-                    if info and info.description:
-                        rec.product_name = info.description
+                original = rec.product_code
+                is_locky = bool(_re.search(r'\bLOCKY\b', original, _re.IGNORECASE))
+
+                # Find longest catalog key that is a prefix of the merged string
+                matched_key = None
+                for ck in cat_keys:
+                    if original.upper().startswith(ck.upper()):
+                        matched_key = ck
+                        break
+
+                if matched_key:
+                    remainder = original[len(matched_key):].strip()
+                    # Always set remainder — overrides any stale "NR" value that
+                    # leaks in when pdfplumber merges the Um column into desc_idx
+                    if remainder:
+                        rec.product_name = remainder
+                    rec.product_code = matched_key
+                    if farad_db.is_loaded:
+                        info = farad_db.lookup(matched_key)
+                        if info and info.description:
+                            rec.product_name = info.description
+                else:
+                    # Catalog key not found — LOCKY gets short code, others unchanged
+                    m = _farad_key_re.match(original)
+                    if m:
+                        short_key = m.group(1)
+                        if is_locky:
+                            rec.product_code = short_key
+                        if farad_db.is_loaded:
+                            lookup = short_key if is_locky else original
+                            info = farad_db.lookup(lookup) or farad_db.lookup(short_key)
+                            if info and info.description:
+                                rec.product_name = info.description
 
         # Enrich name from supplier-specific DB
         _name_db_map = {

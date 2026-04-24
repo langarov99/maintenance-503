@@ -3406,9 +3406,11 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
         if not code or not re.match(r'^1-', code, re.IGNORECASE):
             continue
 
-        # Description: prefer dedicated column; fall back to embedded part
+        # Description: prefer dedicated column; fall back to embedded part.
+        # Guard: when pdfplumber merges columns, desc_idx may point at the Um
+        # column whose content is a unit marker like "NR" or "C." — skip it.
         desc_raw = str(row[desc_idx] or "").strip() if desc_idx is not None and desc_idx < len(row) else ""
-        if desc_raw:
+        if desc_raw and not re.match(r'^(NR|C\.?)\s*$', desc_raw, re.IGNORECASE):
             name = re.sub(r'\s+', ' ', desc_raw).strip()
         elif len(code_parts) > 1:
             name = ' '.join(code_parts[1:])
