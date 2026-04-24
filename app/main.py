@@ -248,21 +248,27 @@ async def extract(
                 if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
                     rec.product_code = "GZ-" + rec.product_code
 
-        # Farad: invoice code "1-B64 LOCKY 1CH.SCNER" → catalog key "B64"
-        # Do this before the general name-DB loop so lookup uses the right key.
+        # Farad: LOCKY products use a short code (B64, D57…); others keep the
+        # full invoice code.  In both cases try to enrich the name from DB.
         if supplier == "farad":
             import re as _re
             _farad_key_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
-            if farad_db.is_loaded:
-                for rec in records:
-                    if not rec.product_code:
-                        continue
-                    m = _farad_key_re.match(rec.product_code)
-                    if m:
-                        info = farad_db.lookup(m.group(1))
-                        if info and info.description:
-                            rec.product_name = info.description
+            for rec in records:
+                if not rec.product_code:
+                    continue
+                m = _farad_key_re.match(rec.product_code)
+                if not m:
+                    continue
+                short_key  = m.group(1)
+                is_locky   = bool(_re.search(r'\bLOCKY\b', rec.product_code, _re.IGNORECASE))
+                lookup_key = short_key if is_locky else rec.product_code
+                if is_locky:
+                    rec.product_code = short_key
+                if farad_db.is_loaded:
+                    info = farad_db.lookup(lookup_key) or farad_db.lookup(short_key)
+                    if info and info.description:
+                        rec.product_name = info.description
 
         # Enrich name from supplier-specific DB
         _name_db_map = {
