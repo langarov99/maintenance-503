@@ -892,22 +892,28 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
             if vat_m:
                 total_str = vat_m.group(1).replace(',', '.')
                 before_vat = rest[:vat_m.start()].strip()
-                # QTY + UOM: search anywhere in before_vat (product name
-                # continuation may appear before the numeric columns).
-                bv_m = re.search(r'\b(\d+)\s+([a-zA-Z]{2,6})\b\s+(.*)',
+                # QTY + UOM: search anywhere in before_vat; price part is optional
+                # (for some rows pdfplumber places the price cell text after VAT%).
+                bv_m = re.search(r'\b(\d+)\s+([a-zA-Z]{2,6})\b(?:\s+(.*))?',
                                  before_vat, re.DOTALL)
                 if not bv_m:
                     logger.warning("Amio: no QTY/UOM in before_vat=%r", before_vat[:120])
                 if bv_m:
                     qty = bv_m.group(1)
-                    # Price = first decimal-looking sequence after UOM
-                    price_seg = bv_m.group(3).strip()
-                    pm = re.match(r'([\d,]+(?:\s+\d+)?)', price_seg)
-                    if pm:
-                        raw = pm.group(1).replace(' ', '').replace(',', '.')
+                    price_seg = (bv_m.group(3) or "").strip()
+                    if price_seg:
+                        pm = re.match(r'([\d,]+(?:\s+\d+)?)', price_seg)
+                        if pm:
+                            raw = pm.group(1).replace(' ', '').replace(',', '.')
+                            try:
+                                price_str = f"{round(float(raw), 2):.2f}"
+                            except ValueError:
+                                pass
+                    # Price not in before_vat — derive from total / qty
+                    if price_str is None and total_str and qty:
                         try:
-                            price_str = f"{round(float(raw), 2):.2f}"
-                        except ValueError:
+                            price_str = f"{float(total_str) / int(qty):.2f}"
+                        except (ValueError, ZeroDivisionError):
                             pass
 
         if code in seen_codes:
