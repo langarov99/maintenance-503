@@ -932,6 +932,7 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
                     name = re.sub(r'\s+', ' ', fallback)[:120]
 
         if code in seen_codes:
+            logger.warning("Amio: duplicate code=%s at row %s — skipped", code, rm.group(1))
             continue
         seen_codes.add(code)
 
