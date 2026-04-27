@@ -4109,7 +4109,7 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
 # Kegel-Błażusiak
 # ---------------------------------------------------------------------------
 
-_KEGEL_CODE_RE = re.compile(r'\b(\d-\d{4}-\d{3}-\d{4})\b')
+_KEGEL_CODE_RE = re.compile(r'(\d[\-–—]\d{4}[\-–—]\d{3}[\-–—]\d{4})')
 
 
 def _is_kegel_blazusiak_document(text: str) -> bool:
@@ -4193,8 +4193,10 @@ def _parse_kegel_blazusiak_from_text(text: str) -> list[ProductRecord]:
     records = []
     seen_codes: set[str] = set()
 
+    logger.info("Kegel text fallback — first 600 chars:\n%s", repr(text[:600]))
     code_matches = list(_KEGEL_CODE_RE.finditer(text))
     if not code_matches:
+        logger.warning("Kegel: no code matches found (pattern=%s)", _KEGEL_CODE_RE.pattern)
         return records
 
     logger.info("Kegel text: found %d code occurrences", len(code_matches))
@@ -4246,6 +4248,7 @@ def _parse_kegel_blazusiak_from_text(text: str) -> list[ProductRecord]:
 
 
 def extract_kegel_blazusiak_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Kegel: %d table(s) received", len(tables))
     records = []
     for table in tables:
         records.extend(_parse_kegel_blazusiak_table(table))
