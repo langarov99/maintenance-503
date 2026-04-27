@@ -416,6 +416,7 @@ _rigum_db:         Optional[SupplierNameDatabase] = None
 _petex_db:         Optional[SupplierNameDatabase] = None
 _gh_db:            Optional[SupplierNameDatabase] = None
 _frogum_db:        Optional[SupplierNameDatabase] = None
+_kegel_db:         Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -546,3 +547,11 @@ def get_rigum_db(data_dir: str) -> SupplierNameDatabase:
         )
         _rigum_db.load()
     return _rigum_db
+
+
+def get_kegel_blazusiak_db(data_dir: str) -> SupplierNameDatabase:
+    global _kegel_db
+    if _kegel_db is None:
+        _kegel_db = SupplierNameDatabase(data_dir, "kegel-products.xlsx")
+        _kegel_db.load()
+    return _kegel_db

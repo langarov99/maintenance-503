@@ -4106,6 +4106,160 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Kegel-Błażusiak
+# ---------------------------------------------------------------------------
+
+_KEGEL_CODE_RE = re.compile(r'\b(\d-\d{4}-\d{3}-\d{4})\b')
+
+
+def _is_kegel_blazusiak_document(text: str) -> bool:
+    return bool(re.search(r'kegel[-\s]?b[łl]azusiak|/KBT/', text, re.IGNORECASE))
+
+
+def _kegel_num(s: str) -> str | None:
+    s = (s or "").strip().replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Kegel-Błażusiak invoice.
+
+    Columns: No. | Item/Artikel (PL name + code + EN name) | Custom code (ignored) |
+             Unit | Quantity | Unit price EUR | Amount EUR
+    """
+    if not table or len(table) < 2:
+        return []
+
+    records = []
+    for row in table:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        # Find the item cell that contains the product code (5-XXXX-XXX-XXXX)
+        item_text = ""
+        for c in row:
+            s = str(c or "")
+            if _KEGEL_CODE_RE.search(s):
+                item_text = s
+                break
+        if not item_text:
+            continue
+
+        code_m = _KEGEL_CODE_RE.search(item_text)
+        if not code_m:
+            continue
+        code = code_m.group(1)
+
+        # Name = lines above the code line inside the item cell
+        lines = [ln.strip() for ln in item_text.splitlines() if ln.strip()]
+        code_line_idx = next((i for i, ln in enumerate(lines) if _KEGEL_CODE_RE.search(ln)), None)
+        if code_line_idx is not None and code_line_idx > 0:
+            name = " ".join(lines[:code_line_idx])[:120]
+        else:
+            raw = item_text[:code_m.start()].strip()
+            name = re.sub(r'\s+', ' ', raw)[:120] or None
+
+        # Fixed column layout: [0]=No, [1]=Item, [2]=Custom(ignore), [3]=Unit, [4]=Qty, [5]=UnitPrice, [6]=Total
+        def cell(idx):
+            if idx >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+
+        qty       = cell(4) or None
+        price_str = _kegel_num(cell(5))
+        total_str = _kegel_num(cell(6))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = (re.sub(r'\s+', ' ', name).strip() or None) if name else None
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("Kegel table: code=%s qty=%s total=%s", code, qty, total_str)
+
+    return records
+
+
+def _parse_kegel_blazusiak_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Kegel-Błażusiak when pdfplumber finds no usable tables."""
+    records = []
+    seen_codes: set[str] = set()
+
+    code_matches = list(_KEGEL_CODE_RE.finditer(text))
+    if not code_matches:
+        return records
+
+    logger.info("Kegel text: found %d code occurrences", len(code_matches))
+
+    for i, cm in enumerate(code_matches):
+        code = cm.group(1)
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        seg_end = code_matches[i + 1].start() if i + 1 < len(code_matches) else len(text)
+        after   = text[cm.end():seg_end].strip()
+
+        # Polish name is on the line immediately before the code
+        before_lines = [ln.strip() for ln in text[:cm.start()].splitlines() if ln.strip()]
+        name = before_lines[-1][:120] if before_lines else None
+
+        qty = price_str = total_str = None
+        decimals = [float(n.replace(',', '.')) for n in re.findall(r'\d+[.,]\d+', after)]
+        integers = [int(n) for n in re.findall(r'\b(\d{1,4})\b', after)]
+
+        if integers:
+            qty = str(integers[0])
+        if len(decimals) >= 2:
+            price_str = f"{decimals[0]:.2f}"
+            total_str = f"{decimals[1]:.2f}"
+        elif len(decimals) == 1:
+            total_str = f"{decimals[0]:.2f}"
+            if qty:
+                try:
+                    price_str = f"{decimals[0] / int(qty):.2f}"
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("Kegel text: code=%s qty=%s total=%s", code, qty, total_str)
+
+    return records
+
+
+def extract_kegel_blazusiak_products(tables: list, text: str = "") -> list[ProductRecord]:
+    records = []
+    for table in tables:
+        records.extend(_parse_kegel_blazusiak_table(table))
+    if records:
+        logger.info("Kegel: %d records from tables", len(records))
+        return records
+
+    if text:
+        records = _parse_kegel_blazusiak_from_text(text)
+        logger.info("Kegel text extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -4260,6 +4414,14 @@ class FieldMapper:
             records = extract_geyer_hosaja_products(tables, text)
             if records:
                 logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
+                return records
+
+        # Step 0q — Kegel-Błażusiak (explicit selection or auto-detection)
+        if supplier == "kegel_blazusiak" or (supplier == "auto" and _is_kegel_blazusiak_document(text)):
+            _specific_tried = True
+            records = extract_kegel_blazusiak_products(tables, text)
+            if records:
+                logger.info("Extraction method: Kegel-Blazusiak (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

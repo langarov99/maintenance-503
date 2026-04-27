@@ -20,7 +20,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_kegel_blazusiak_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -337,8 +337,9 @@ async def extract(
             "petex":         get_petex_db,
             "geter_hosaja":  get_geyer_hosaja_db,
             "frogum":        get_frogum_db,
-            "gelly_plast":   get_gelly_plast_db,
-            "farad":         get_farad_db,
+            "gelly_plast":     get_gelly_plast_db,
+            "farad":           get_farad_db,
+            "kegel_blazusiak": get_kegel_blazusiak_db,
         }
         if supplier in _name_db_map:
             name_db = _name_db_map[supplier](str(DATA_DIR))
