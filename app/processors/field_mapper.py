@@ -886,9 +886,9 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
             r'(\d{8})\s+'   # CN code (skip)
             r'(\d+)\s+'     # QTY
             r'\S+\s+'       # UOM (kpl / szt / any non-space)
-            r'([\d,]+)\s+'  # unit price
-            r'\d+%\s+'      # VAT
-            r'([\d,]+)',    # total value
+            r'([\d,]+(?:\s+\d+)?)\s+'  # unit price (may wrap: "10,071\n0" → "10,071 0")
+            r'\d+%\s+'                  # VAT
+            r'([\d,]+)',                # total value
             after
         )
 
@@ -903,7 +903,8 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
 
         if after_m:
             rec.quantity    = after_m.group(2)
-            rec.price       = after_m.group(3).replace(',', '.') + ' EUR'
+            # Join split price ("10,071 0" → "10.0710")
+            rec.price       = after_m.group(3).replace(' ', '').replace(',', '.') + ' EUR'
             rec.total_price = after_m.group(4).replace(',', '.') + ' EUR'
 
         records.append(rec)
