@@ -849,50 +849,66 @@ def _parse_amio_table(table: list[list]) -> list[ProductRecord]:
 def _parse_amio_from_text(text: str) -> list[ProductRecord]:
     """Text fallback for Amio invoices when pdfplumber finds no tables.
 
-    Row format (columns may wrap across lines):
-      No.  Product_number(5dig)  Product_Name  EAN(13dig)  CN_Code(8dig)
-      QTY  UOM  Unit_Price  VAT%  Total_Value  COO
+    Two-step approach:
+      1. Locate every row start: "N.  <4-6 digit code>" in the flattened text.
+      2. For each segment between consecutive row starts, anchor on the
+         13-digit EAN to split name / numeric fields.
     """
     records: list[ProductRecord] = []
     seen_codes: set[str] = set()
 
-    # Flatten to one string so multi-line product names are contiguous
+    # Flatten to one string — multi-line product names become contiguous.
     full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
 
-    pattern = re.compile(
-        r'\b\d+\.\s+'           # row number  "1."
-        r'(\d{5})\s+'           # product code (exactly 5 digits)
-        r'(.+?)\s+'             # product name (lazy – stops at EAN)
-        r'(\d{13})\s+'          # EAN (13 digits)
-        r'\d{8}\s+'             # CN code (8 digits, skip)
-        r'(\d+)\s+'             # QTY
-        r'\w+\s+'               # UOM  (kpl / szt / …)
-        r'([\d,]+)\s+'          # unit price
-        r'\d+%\s+'              # VAT  (0% / 23% / …)
-        r'([\d,]+)',            # total value
-    )
+    # Step 1 — find all row starts.
+    row_re = re.compile(r'\b(\d{1,3})\.\s+(\d{4,6})\s+')
+    row_starts = list(row_re.finditer(full))
+    if not row_starts:
+        return records
 
-    for m in pattern.finditer(full):
-        code       = m.group(1)
-        name       = re.sub(r'\s+', ' ', m.group(2)).strip()
-        ean        = m.group(3)
-        qty        = m.group(4)
-        unit_price = m.group(5).replace(',', '.')
-        total      = m.group(6).replace(',', '.')
+    for i, rm in enumerate(row_starts):
+        code = rm.group(2)
+        seg_start = rm.end()
+        seg_end   = row_starts[i + 1].start() if i + 1 < len(row_starts) else len(full)
+        segment   = full[seg_start:seg_end]
+
+        # Step 2 — anchor on 13-digit EAN.
+        ean_m = re.search(r'\b(\d{13})\b', segment)
+        if not ean_m:
+            continue
+
+        name  = re.sub(r'\s+', ' ', segment[:ean_m.start()]).strip()
+        after = segment[ean_m.end():].strip()
+        ean   = ean_m.group(1)
+
+        # After EAN: CN(8dig) QTY UOM unit_price VAT% total
+        after_m = re.match(
+            r'(\d{8})\s+'   # CN code (skip)
+            r'(\d+)\s+'     # QTY
+            r'\S+\s+'       # UOM (kpl / szt / any non-space)
+            r'([\d,]+)\s+'  # unit price
+            r'\d+%\s+'      # VAT
+            r'([\d,]+)',    # total value
+            after
+        )
 
         if code in seen_codes:
             continue
         seen_codes.add(code)
 
         rec = ProductRecord(extraction_method="table")
-        rec.product_code  = code
-        rec.product_name  = name[:120] if name else None
-        rec.ean           = ean
-        rec.quantity      = qty
-        rec.price         = unit_price + ' EUR'
-        rec.total_price   = total + ' EUR'
+        rec.product_code = code
+        rec.product_name = name[:120] if name else None
+        rec.ean          = ean
+
+        if after_m:
+            rec.quantity    = after_m.group(2)
+            rec.price       = after_m.group(3).replace(',', '.') + ' EUR'
+            rec.total_price = after_m.group(4).replace(',', '.') + ' EUR'
+
         records.append(rec)
-        logger.info("Amio text: code=%s qty=%s total=%s", code, qty, total)
+        logger.info("Amio text: code=%s qty=%s total=%s",
+                    code, rec.quantity, rec.total_price)
 
     return records
 
@@ -912,6 +928,11 @@ def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
         logger.info("Amio: no table records — trying text extraction")
         records = _parse_amio_from_text(text)
         logger.info("Amio text extraction: %d records", len(records))
+
+    # Add AMIO- prefix to all product codes (both table and text paths).
+    for rec in records:
+        if rec.product_code and not rec.product_code.startswith("AMIO-"):
+            rec.product_code = "AMIO-" + rec.product_code
 
     return records
 
