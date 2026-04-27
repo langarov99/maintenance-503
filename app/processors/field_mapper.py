@@ -855,7 +855,7 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
          13-digit EAN to split name / numeric fields.
     """
     records: list[ProductRecord] = []
-    seen_codes: set[str] = set()
+    seen_rows: set[str] = set()  # dedup by row number, not code — same product can appear twice
 
     # Flatten to one string — multi-line product names become contiguous.
     full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
@@ -931,10 +931,10 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
                 if len(fallback) > 3:
                     name = re.sub(r'\s+', ' ', fallback)[:120]
 
-        if code in seen_codes:
-            logger.warning("Amio: duplicate code=%s at row %s — skipped", code, rm.group(1))
+        row_num = rm.group(1)
+        if row_num in seen_rows:
             continue
-        seen_codes.add(code)
+        seen_rows.add(row_num)
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
