@@ -881,16 +881,26 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
         after = segment[ean_m.end():].strip()
         ean   = ean_m.group(1)
 
-        # After EAN: CN(8dig) QTY UOM unit_price VAT% total
-        after_m = re.match(
-            r'(\d{8})\s+'   # CN code (skip)
-            r'(\d+)\s+'     # QTY
-            r'\S+\s+'       # UOM (kpl / szt / any non-space)
-            r'([\d,]+(?:\s+\d+)?)\s+'  # unit price (may wrap: "10,071\n0" → "10,071 0")
-            r'\d+%\s+'                  # VAT
-            r'([\d,]+)',                # total value
-            after
-        )
+        # Parse after-EAN fields step by step — more robust than one big regex.
+        # Layout: CN(8dig) QTY UOM ...price(may split)... VAT% total COO
+        qty = price_str = total_str = None
+        cn_m = re.match(r'(\d{8})\s+(.*)', after, re.DOTALL)
+        if cn_m:
+            rest = cn_m.group(2).strip()
+            # Anchor on VAT% to separate price from total
+            vat_m = re.search(r'\b\d+%\s+([\d,]+)', rest)
+            if vat_m:
+                total_str = vat_m.group(1).replace(',', '.')
+                before_vat = rest[:vat_m.start()].strip()
+                # QTY = first pure-integer token; UOM = next token; rest = price
+                bv_m = re.match(r'(\d+)\s+\S+\s+(.*)', before_vat, re.DOTALL)
+                if bv_m:
+                    qty = bv_m.group(1)
+                    raw = bv_m.group(2).strip().replace(' ', '').replace(',', '.')
+                    try:
+                        price_str = f"{round(float(raw), 2):.2f}"
+                    except ValueError:
+                        price_str = raw
 
         if code in seen_codes:
             continue
@@ -901,15 +911,12 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
         rec.product_name = name[:120] if name else None
         rec.ean          = ean
 
-        if after_m:
-            rec.quantity    = after_m.group(2)
-            # Join split price ("10,071 0" → "10.0710") then round to 2 decimals
-            raw_price = after_m.group(3).replace(' ', '').replace(',', '.')
-            try:
-                rec.price = f"{round(float(raw_price), 2):.2f} EUR"
-            except ValueError:
-                rec.price = raw_price + ' EUR'
-            rec.total_price = after_m.group(4).replace(',', '.') + ' EUR'
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
 
         records.append(rec)
         logger.info("Amio text: code=%s qty=%s total=%s",
