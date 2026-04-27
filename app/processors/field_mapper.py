@@ -918,6 +918,16 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
                         except (ValueError, ZeroDivisionError):
                             pass
 
+            # Fallback name: pdfplumber places long (wrapped) product names AFTER
+            # the numeric columns in the flattened text stream.
+            # Layout tail: VAT% total COO <product_name>
+            if not name and vat_m:
+                after_total = rest[vat_m.end():].strip()
+                coo_m = re.match(r'^[A-Z]{2}\s+(.*)', after_total, re.DOTALL)
+                fallback = (coo_m.group(1) if coo_m else after_total).strip()
+                if len(fallback) > 3:
+                    name = re.sub(r'\s+', ' ', fallback)[:120]
+
         if code in seen_codes:
             continue
         seen_codes.add(code)
