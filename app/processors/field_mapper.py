@@ -903,8 +903,12 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
 
         if after_m:
             rec.quantity    = after_m.group(2)
-            # Join split price ("10,071 0" → "10.0710")
-            rec.price       = after_m.group(3).replace(' ', '').replace(',', '.') + ' EUR'
+            # Join split price ("10,071 0" → "10.0710") then round to 2 decimals
+            raw_price = after_m.group(3).replace(' ', '').replace(',', '.')
+            try:
+                rec.price = f"{round(float(raw_price), 2):.2f} EUR"
+            except ValueError:
+                rec.price = raw_price + ' EUR'
             rec.total_price = after_m.group(4).replace(',', '.') + ' EUR'
 
         records.append(rec)
