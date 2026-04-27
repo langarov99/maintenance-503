@@ -861,7 +861,8 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
     full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
 
     # Step 1 — find all row starts.
-    row_re = re.compile(r'\b(\d{1,3})\.\s+([A-Za-z0-9]{2,10})\s+')
+    # Product codes may be purely numeric, alphanumeric, or contain hyphens (e.g. "04335", "SED31269", "04335-B").
+    row_re = re.compile(r'\b(\d{1,3})\.\s+([A-Za-z0-9][A-Za-z0-9\-]{1,14})\s+')
     row_starts = list(row_re.finditer(full))
     detected_nums = [m.group(1) for m in row_starts]
     logger.info("Amio: detected row numbers (%d): %s", len(row_starts), detected_nums)
@@ -877,6 +878,8 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
         # Step 2 — anchor on 13-digit EAN.
         ean_m = re.search(r'\b(\d{13})\b', segment)
         if not ean_m:
+            logger.warning("Amio: row %s (code=%s) has no 13-digit EAN — skipped. segment=%r",
+                           rm.group(1), code, segment[:120])
             continue
 
         name  = re.sub(r'\s+', ' ', segment[:ean_m.start()]).strip()
