@@ -289,19 +289,34 @@ async def extract(
                 if matched_key:
                     if matched_remainder:
                         rec.product_name = matched_remainder
-                    # Use the internal_code from DB (preserves Excel casing)
                     if farad_db.is_loaded:
                         info = farad_db.lookup(matched_key)
-                        rec.product_code = (info.internal_code
-                                            if info and info.internal_code
-                                            else matched_key)
+                        base_code = (info.internal_code
+                                     if info and info.internal_code
+                                     else matched_key)
                         if info and info.description:
                             rec.product_name = info.description
                     else:
-                        rec.product_code = matched_key
+                        info = None
+                        base_code = matched_key
+                    # Rack codes start with a digit → restore "1-" prefix.
+                    # Bolt/nut codes start with a letter → use as-is.
+                    if base_code and base_code[0].isdigit():
+                        rec.product_code = "1-" + base_code
+                    else:
+                        rec.product_code = base_code
                 else:
-                    # No catalog match — keep original full invoice code
+                    # No catalog match: extract clean code from invoice string.
                     short_key = m.group(1)
+                    if short_key and short_key[0].isdigit():
+                        rec.product_code = "1-" + short_key
+                    else:
+                        rec.product_code = short_key
+                    # Name: use what the extractor already parsed; try DB as bonus.
+                    if not rec.product_name:
+                        remainder = original[len(m.group(0)):].strip()
+                        if remainder:
+                            rec.product_name = remainder
                     if farad_db.is_loaded:
                         info = farad_db.lookup(short_key)
                         if info and info.description:
