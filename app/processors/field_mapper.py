@@ -846,6 +846,57 @@ def _parse_amio_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+def _parse_amio_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Amio invoices when pdfplumber finds no tables.
+
+    Row format (columns may wrap across lines):
+      No.  Product_number(5dig)  Product_Name  EAN(13dig)  CN_Code(8dig)
+      QTY  UOM  Unit_Price  VAT%  Total_Value  COO
+    """
+    records: list[ProductRecord] = []
+    seen_codes: set[str] = set()
+
+    # Flatten to one string so multi-line product names are contiguous
+    full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
+
+    pattern = re.compile(
+        r'\b\d+\.\s+'           # row number  "1."
+        r'(\d{5})\s+'           # product code (exactly 5 digits)
+        r'(.+?)\s+'             # product name (lazy – stops at EAN)
+        r'(\d{13})\s+'          # EAN (13 digits)
+        r'\d{8}\s+'             # CN code (8 digits, skip)
+        r'(\d+)\s+'             # QTY
+        r'\w+\s+'               # UOM  (kpl / szt / …)
+        r'([\d,]+)\s+'          # unit price
+        r'\d+%\s+'              # VAT  (0% / 23% / …)
+        r'([\d,]+)',            # total value
+    )
+
+    for m in pattern.finditer(full):
+        code       = m.group(1)
+        name       = re.sub(r'\s+', ' ', m.group(2)).strip()
+        ean        = m.group(3)
+        qty        = m.group(4)
+        unit_price = m.group(5).replace(',', '.')
+        total      = m.group(6).replace(',', '.')
+
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name[:120] if name else None
+        rec.ean           = ean
+        rec.quantity      = qty
+        rec.price         = unit_price + ' EUR'
+        rec.total_price   = total + ' EUR'
+        records.append(rec)
+        logger.info("Amio text: code=%s qty=%s total=%s", code, qty, total)
+
+    return records
+
+
 def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Amio: %d table(s) received", len(tables))
     records = []
@@ -856,6 +907,12 @@ def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
                 seen_codes.add(rec.product_code)
                 records.append(rec)
     logger.info("Amio extraction: %d records from %d tables", len(records), len(tables))
+
+    if not records and text:
+        logger.info("Amio: no table records — trying text extraction")
+        records = _parse_amio_from_text(text)
+        logger.info("Amio text extraction: %d records", len(records))
+
     return records
 
 
