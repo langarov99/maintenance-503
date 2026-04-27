@@ -861,7 +861,7 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
     full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
 
     # Step 1 — find all row starts.
-    row_re = re.compile(r'\b(\d{1,3})\.\s+(\d{4,6})\s+')
+    row_re = re.compile(r'\b(\d{1,3})\.\s+(\d{2,8})\s+')
     row_starts = list(row_re.finditer(full))
     detected_nums = [m.group(1) for m in row_starts]
     logger.info("Amio: detected row numbers (%d): %s", len(row_starts), detected_nums)
