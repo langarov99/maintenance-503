@@ -896,6 +896,8 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
                 # continuation may appear before the numeric columns).
                 bv_m = re.search(r'\b(\d+)\s+([a-zA-Z]{2,6})\b\s+(.*)',
                                  before_vat, re.DOTALL)
+                if not bv_m:
+                    logger.warning("Amio: no QTY/UOM in before_vat=%r", before_vat[:120])
                 if bv_m:
                     qty = bv_m.group(1)
                     # Price = first decimal-looking sequence after UOM
