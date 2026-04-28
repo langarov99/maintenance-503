@@ -4545,6 +4545,135 @@ def extract_kegel_blazusiak_products(tables: list, text: str = "") -> list[Produ
 
 
 # ---------------------------------------------------------------------------
+# ToM-PaR
+# ---------------------------------------------------------------------------
+
+_TOMPAR_CODE_RE = re.compile(r'\b(TP\d{6})\b', re.IGNORECASE)
+
+
+def _is_tompar_document(text: str) -> bool:
+    return bool(re.search(r'tom[-\s]?par|NIP[:\s]+1182250133', text, re.IGNORECASE))
+
+
+def extract_tompar_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("ToMPaR: %d table(s) received", len(tables))
+    for li, line in enumerate(text.splitlines()):
+        logger.info("ToMPaR line[%02d]: %r", li, line)
+
+    records = _parse_tompar_from_text(text)
+    logger.info("ToMPaR text extraction: %d records", len(records))
+    return records
+
+
+def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
+    """
+    ToM-PaR invoice layout (per pdfplumber text):
+    Each product occupies several lines. The product code (TP######) appears
+    on its own line. Numbers (qty, unit price, total) appear on the line that
+    contains the row number (Lp), or can be reconstructed from surrounding lines.
+
+    Strategy: collect lines into blocks separated by the code line, then
+    extract qty / unit-price / total from numbers on the Lp line.
+    """
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+    lines = text.splitlines()
+
+    # Numbers on a Lp-line look like:
+    # "1 Szczotka Do Mycia Nice Touch NT Lux 18 szt. 3,11 0,00 3,11 55,98 0 0,00 55,98"
+    # We need: qty (first integer after text), unit_price, gross_total (last number)
+    num_re = re.compile(r'[\d]+(?:[.,]\d+)?')
+
+    def _to_float(s: str) -> float | None:
+        try:
+            return float(s.replace(',', '.').replace(' ', ''))
+        except ValueError:
+            return None
+
+    for i, line in enumerate(lines):
+        m = _TOMPAR_CODE_RE.search(line)
+        if not m:
+            continue
+        code = m.group(1).upper()
+        if code in seen:
+            continue
+        seen.add(code)
+
+        # Look back up to 5 lines for a line that starts with Lp number and has many numbers
+        name_line = ""
+        qty = None
+        unit_price = None
+        total = None
+
+        for j in range(max(0, i - 5), i):
+            candidate = lines[j]
+            # Lp line starts with a digit and contains "szt." or many numbers
+            if re.match(r'^\d+\s+\S', candidate) and ('szt' in candidate or len(num_re.findall(candidate)) >= 4):
+                name_line = candidate
+                break
+
+        if name_line:
+            nums = num_re.findall(name_line)
+            # Strip the leading Lp number
+            if nums:
+                nums = nums[1:]  # skip Lp index
+            # Find qty: first integer-only token after name words
+            for k, n in enumerate(nums):
+                if ',' not in n and '.' not in n:
+                    try:
+                        qty = str(int(n))
+                        # unit_price is a few positions after qty; total is the last number
+                        remaining = nums[k + 1:]
+                        float_nums = [x for x in remaining if _to_float(x) is not None]
+                        if float_nums:
+                            total = _to_float(float_nums[-1])
+                        # unit_price: net unit price column (Cena jedn. netto)
+                        # columns after qty: bez_rabatu, rabat%, cena_jedn, wartosc_netto, st%, podatek, brutto
+                        # That is indices 0,1,2,3,4,5,6 → unit_price = float_nums[2]
+                        if len(float_nums) >= 3:
+                            unit_price = _to_float(float_nums[2])
+                        break
+                    except ValueError:
+                        continue
+
+        # Extract name from lines between previous code line and current code line
+        # Fallback: use code itself
+        name_parts = []
+        for j in range(max(0, i - 5), i):
+            ln = lines[j].strip()
+            if not ln:
+                continue
+            # Skip lines that are mostly numbers
+            if len(num_re.findall(ln)) >= 4:
+                # This is the Lp line — extract name part (text before first standalone integer)
+                lp_match = re.match(r'^\d+\s+(.+?)\s+\d+\s+szt', ln, re.IGNORECASE)
+                if lp_match:
+                    name_parts.append(lp_match.group(1).strip())
+                continue
+            if re.match(r'^\d+$', ln):
+                continue
+            name_parts.append(ln)
+
+        name = " ".join(name_parts).strip()[:150] or None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if unit_price is not None:
+            rec.price = f"{unit_price:.2f} EUR"
+        if total is not None:
+            rec.total_price = f"{total:.2f} EUR"
+
+        records.append(rec)
+        logger.info("ToMPaR: code=%s qty=%s price=%s total=%s name=%r",
+                    code, qty, unit_price, total, name)
+
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -4723,6 +4852,14 @@ class FieldMapper:
             records = extract_kegel_blazusiak_products(tables, text)
             if records:
                 logger.info("Extraction method: Kegel-Blazusiak (%d records)", len(records))
+                return records
+
+        # Step 0t — ToM-PaR (explicit selection or auto-detection)
+        if supplier == "tompar" or (supplier == "auto" and _is_tompar_document(text)):
+            _specific_tried = True
+            records = extract_tompar_products(tables, text)
+            if records:
+                logger.info("Extraction method: ToM-PaR (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

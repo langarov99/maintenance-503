@@ -581,3 +581,14 @@ def get_hakr_db(data_dir: str) -> SupplierNameDatabase:
         _hakr_db = SupplierNameDatabase(data_dir, "hark-products.xlsx")
         _hakr_db.load()
     return _hakr_db
+
+
+_tompar_db: Optional[SupplierNameDatabase] = None
+
+
+def get_tompar_db(data_dir: str) -> SupplierNameDatabase:
+    global _tompar_db
+    if _tompar_db is None:
+        _tompar_db = SupplierNameDatabase(data_dir, "tompar-products.xlsx")
+        _tompar_db.load()
+    return _tompar_db
