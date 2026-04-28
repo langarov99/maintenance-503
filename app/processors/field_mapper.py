@@ -4116,66 +4116,52 @@ def _is_hakr_document(text: str) -> bool:
 def _parse_hakr_table(table: list[list]) -> list[ProductRecord]:
     """Parse one pdfplumber table from a Hakr invoice.
 
-    Columns: Description (CODE:Name) | Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
+    Scans every row for a cell matching CODE:Name format (e.g. HV5902:Speed - ALU BLACK).
+    Column layout: Description | Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
     """
-    if not table or len(table) < 2:
+    if not table:
         return []
 
-    # Find header row to determine column indices
-    header_idx = None
-    for i, row in enumerate(table):
-        joined = " ".join(str(c or "").lower() for c in row)
-        if "description" in joined and ("q'ty" in joined or "qty" in joined or "quantity" in joined):
-            header_idx = i
-            break
-
-    if header_idx is not None:
-        headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
-        def find(kws):
-            for kw in kws:
-                for idx, h in enumerate(headers):
-                    if kw in h:
-                        return idx
-            return None
-        desc_idx  = find(["description"])
-        qty_idx   = find(["q'ty", "qty", "quantity"])
-        price_idx = find(["unit price", "unit"])
-        total_idx = find(["total"])
-        data_start = header_idx + 1
-    else:
-        desc_idx, qty_idx, price_idx, total_idx = 0, 1, 2, 7
-        data_start = 0
-
     records = []
-    for row in table[data_start:]:
+    for row in table:
         if not any(str(c or "").strip() for c in row):
             continue
 
-        def cell(ci):
-            if ci is None or ci >= len(row):
-                return ""
-            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
-
-        desc = cell(desc_idx)
-        if not desc or ':' not in desc:
+        # Find the cell that contains CODE:Name
+        desc = ""
+        desc_col = None
+        for ci, c in enumerate(row):
+            s = re.sub(r'\s+', ' ', str(c or "")).strip()
+            if ':' in s and re.match(r'^[A-Za-z]{1,6}\d{3,8}:', s):
+                desc = s
+                desc_col = ci
+                break
+        if not desc or desc_col is None:
             continue
 
-        # Split CODE:Name
         colon = desc.index(':')
         code_raw = desc[:colon].strip()
         name     = desc[colon + 1:].strip()[:120] or None
 
-        # Validate code: starts with letters, followed by digits
-        if not re.match(r'^[A-Za-z]{1,4}\d{3,6}$', code_raw):
+        # Skip total/summary rows (negative amounts or non-product codes)
+        if not re.match(r'^[A-Za-z]{1,6}\d{3,8}$', code_raw):
             continue
 
-        # Qty: "2 pcs" → "2"
-        qty_raw = cell(qty_idx)
-        qty_m = re.match(r'(\d+)', qty_raw)
+        # Expected layout after desc_col: Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
+        def cell(offset):
+            idx = desc_col + offset
+            if idx >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+
+        qty_m = re.match(r'(\d+)', cell(1))
         qty = qty_m.group(1) if qty_m else None
 
-        price_str = _kegel_num(cell(price_idx))
-        total_str = _kegel_num(cell(total_idx))
+        price_str = _kegel_num(cell(2))   # Unit price
+        total_str = _kegel_num(cell(7))   # Total (last column)
+        # Fallback: if Total not at offset 7, try offset 6
+        if total_str is None:
+            total_str = _kegel_num(cell(6))
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code_raw
