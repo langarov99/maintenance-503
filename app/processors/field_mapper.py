@@ -4241,6 +4241,10 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
 
 def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Hakr: %d table(s) received", len(tables))
+    for ti, table in enumerate(tables):
+        logger.info("Hakr table[%d] (%d rows): first row=%r", ti, len(table),
+                    [str(c or "")[:40] for c in (table[0] if table else [])])
+    logger.info("Hakr text first 400: %r", text[:400])
     raw: list[ProductRecord] = []
     for table in tables:
         raw.extend(_parse_hakr_table(table))
