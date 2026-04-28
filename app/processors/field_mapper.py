@@ -1514,7 +1514,7 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
         logger.info("Ma*Fra table: header row not found")
         return []
 
-    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    headers = [str(c or "").lower().strip().replace('\n', '') for c in table[header_idx]]
     logger.info("Ma*Fra table: header at row %d: %s", header_idx, headers)
 
     def find(kws):
@@ -1527,9 +1527,10 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
     # "коло" = OCR garbling of "Код"
     code_idx  = find(["код", "коло", "code"])
     desc_idx  = find(["наим", "яим", "аим", "описание", "description", "стока"])
-    qty_idx   = find(["кол-во", "кол во", "qty", "количество"])
+    qty_idx   = find(["кол-во", "кол во", "кол-", "qty", "количество"])
     price_idx = find(["ед. цена", "ед.цена", "ед цена", "unit price", "цена"])
-    total_idx = find(["общо", "total", "нв", "o6mo", "обмо"])
+    total_idx = find(["общо", "обшо", "total", "нв", "o6mo", "обмо"])
+    val_idx   = find(["вал.", "вал", "валута", "currency"])
 
     if code_idx is None:
         logger.info("Ma*Fra table: code column not found in headers")
@@ -1556,11 +1557,11 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
             if cleaned:
                 code = _fix_mafra_code(cleaned)
             if not _MAFRA_CODE_RE.match(code):
-                # Try H + digits fallback
+                # Purely numeric code (e.g. 0466, 0473) — keep as-is
                 digits = re.sub(r'\D', '', raw_code)
                 if re.match(r'^\d{3,5}$', digits):
-                    code = 'H' + digits
-                if not _MAFRA_CODE_RE.match(code):
+                    code = digits
+                if not _MAFRA_CODE_RE.match(code) and not re.match(r'^\d{3,5}$', code):
                     continue
 
         rec = ProductRecord(extraction_method="table")
@@ -1578,17 +1579,21 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
             except ValueError:
                 rec.quantity = qty_raw or None
 
+        currency = cell(val_idx).upper() if val_idx is not None else "EUR"
+        if not currency:
+            currency = "EUR"
+
         if price_idx is not None:
             price_raw = cell(price_idx)
             p = _clean_num(price_raw)
             if p:
-                rec.price = p + " EUR"
+                rec.price = p + " " + currency
 
         if total_idx is not None:
             total_raw = cell(total_idx)
             t = _clean_num(total_raw)
             if t:
-                rec.total_price = t + " EUR"
+                rec.total_price = t + " " + currency
 
         records.append(rec)
 
