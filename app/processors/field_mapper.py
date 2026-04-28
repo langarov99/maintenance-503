@@ -4230,7 +4230,10 @@ def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
     for ti, table in enumerate(tables):
         logger.info("Hakr table[%d] (%d rows): first row=%r", ti, len(table),
                     [str(c or "")[:40] for c in (table[0] if table else [])])
-    logger.info("Hakr text first 400: %r", text[:400])
+        for ri, row in enumerate(table):
+            logger.info("Hakr table[%d] row[%d] = %r", ti, ri, [str(c or "")[:80] for c in row])
+    for li, line in enumerate(text.splitlines()):
+        logger.info("Hakr line[%02d]: %r", li, line)
     raw: list[ProductRecord] = []
     for table in tables:
         raw.extend(_parse_hakr_table(table))
