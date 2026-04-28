@@ -4184,56 +4184,57 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
     records = []
     seen: set[str] = set()
 
-    # Each data row: CODE:Name  N pcs  unit_price  ...  total
+    # Format per line: CODE:Name Npcs unit_price subtotal VAT% VAT_amount total
+    # Example: HV5902:Speed - ALU BLACK 2pcs 38.40 76.80 0% 0.00 76.80
     row_re = re.compile(
-        r'\b([A-Z]{1,4}\d{3,6}):([^\n]+?)\s+'
-        r'(\d+)\s+pcs\s+'
-        r'([\d.]+)(?:\s+[\d.]+)?\s+'
-        r'([\d.]+)',
+        r'^([A-Za-z]{1,8}\d{3,10}):(.+?)\s+'
+        r'(\d+)pcs\s+'
+        r'([\d.,]+)\s+'
+        r'([\d.,]+)\s+'
+        r'\d+%\s+'
+        r'[\d.,]+\s+'
+        r'([\d.,]+)',
         re.IGNORECASE
     )
-    for m in row_re.finditer(text):
-        code = m.group(1).strip()
+
+    def _to_float(s: str):
+        try:
+            return float(s.replace(',', ''))
+        except ValueError:
+            return None
+
+    for line in text.splitlines():
+        m = row_re.match(line)
+        if not m:
+            continue
+        code = m.group(1).upper()
         if code in seen:
             continue
         seen.add(code)
 
         name = m.group(2).strip()[:120]
         qty = m.group(3)
-        try:
-            price_str = f"{float(m.group(4)):.2f}"
-        except ValueError:
-            price_str = None
-        try:
-            total_str = f"{float(m.group(5)):.2f}"
-        except ValueError:
-            total_str = None
+        unit_price = _to_float(m.group(4))
+        total = _to_float(m.group(6))
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
         rec.product_name = name or None
         if qty:
             rec.quantity = qty
-        if price_str:
-            rec.price = price_str + ' EUR'
-        if total_str:
-            rec.total_price = total_str + ' EUR'
+        if unit_price is not None:
+            rec.price = f"{unit_price:.2f} EUR"
+        if total is not None:
+            rec.total_price = f"{total:.2f} EUR"
 
         records.append(rec)
-        logger.info("Hakr text: code=%s qty=%s total=%s", code, qty, total_str)
+        logger.info("Hakr text: code=%s qty=%s price=%s total=%s", code, qty, unit_price, total)
 
     return records
 
 
 def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Hakr: %d table(s) received", len(tables))
-    for ti, table in enumerate(tables):
-        logger.info("Hakr table[%d] (%d rows): first row=%r", ti, len(table),
-                    [str(c or "")[:40] for c in (table[0] if table else [])])
-        for ri, row in enumerate(table):
-            logger.info("Hakr table[%d] row[%d] = %r", ti, ri, [str(c or "")[:80] for c in row])
-    for li, line in enumerate(text.splitlines()):
-        logger.info("Hakr line[%02d]: %r", li, line)
     raw: list[ProductRecord] = []
     for table in tables:
         raw.extend(_parse_hakr_table(table))
