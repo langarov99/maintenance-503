@@ -4214,11 +4214,20 @@ def _parse_automania_from_text(text: str) -> list[ProductRecord]:
 
 def extract_automania_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("AutoMania: %d table(s) received", len(tables))
-    records = []
+    raw: list[ProductRecord] = []
     for table in tables:
-        records.extend(_parse_automania_table(table))
+        raw.extend(_parse_automania_table(table))
+
+    # Deduplicate by code — PDF contains both original and copy of the invoice
+    seen: set[str] = set()
+    records = []
+    for rec in raw:
+        if rec.product_code not in seen:
+            seen.add(rec.product_code)
+            records.append(rec)
+
     if records:
-        logger.info("AutoMania: %d records from tables", len(records))
+        logger.info("AutoMania: %d records from tables (after dedup)", len(records))
         return records
 
     if text:

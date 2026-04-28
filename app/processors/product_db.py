@@ -312,9 +312,11 @@ def get_rezaw_plast_db(data_dir: str) -> RezawPlastDatabase:
 
 class SupplierNameDatabase:
     def __init__(self, data_dir: str, filename: str,
-                 desc_keywords: list | None = None):
+                 desc_keywords: list | None = None,
+                 strip_prefix: str = ""):
         self.data_dir = Path(data_dir)
         self.filename = filename
+        self._strip_prefix = strip_prefix.upper()
         # Caller can override to prefer a specific column (e.g. "eshop" for Rigum)
         self._desc_keywords = desc_keywords or [
             "описание", "description", "name", "naziv", "наименование"
@@ -361,7 +363,10 @@ class SupplierNameDatabase:
     def lookup(self, code: str) -> Optional[ProductInfo]:
         if not code or not self._loaded:
             return None
-        return self._by_code.get(code.strip().upper())
+        key = code.strip().upper()
+        if self._strip_prefix and key.startswith(self._strip_prefix):
+            key = key[len(self._strip_prefix):]
+        return self._by_code.get(key)
 
     def lookup_by_desc_words(self, words: list[str],
                               min_overlap: int = 3,
@@ -561,6 +566,7 @@ def get_kegel_blazusiak_db(data_dir: str) -> SupplierNameDatabase:
 def get_automania_db(data_dir: str) -> SupplierNameDatabase:
     global _automania_db
     if _automania_db is None:
-        _automania_db = SupplierNameDatabase(data_dir, "automania-products.xlsx")
+        _automania_db = SupplierNameDatabase(data_dir, "automania-products.xlsx",
+                                             strip_prefix="AVM-")
         _automania_db.load()
     return _automania_db
