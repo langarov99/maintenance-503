@@ -4106,6 +4106,128 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# AutoMania
+# ---------------------------------------------------------------------------
+
+def _is_automania_document(text: str) -> bool:
+    return bool(re.search(r'автомания|automania', text, re.IGNORECASE))
+
+
+def _parse_automania_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from an AutoMania invoice.
+
+    Columns: № | Наименование | Код | Мярка | Колич. | Ед.цена EUR | Стойност EUR
+    """
+    if not table or len(table) < 2:
+        return []
+
+    records = []
+    for row in table:
+        if not any(str(c or "").strip() for c in row):
+            continue
+        if len(row) < 5:
+            continue
+
+        def cell(idx):
+            if idx >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+
+        # Skip header rows
+        code_raw = cell(2)
+        if not code_raw or re.search(r'код|code|наименование', code_raw, re.IGNORECASE):
+            continue
+        # Skip rows where code is just a number that looks like a row number or price
+        if not re.match(r'^(?:\d{4,6}|[A-Za-z]{2,4}\s*\d{2,4})$', code_raw):
+            continue
+
+        name      = cell(1) or None
+        qty       = cell(4) or None
+        price_str = _kegel_num(cell(5))
+        total_str = _kegel_num(cell(6))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = f"AVM-{code_raw}"
+        rec.product_name = name[:120] if name else None
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("AutoMania table: code=%s qty=%s total=%s", rec.product_code, qty, total_str)
+
+    return records
+
+
+def _parse_automania_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for AutoMania invoices."""
+    records = []
+    seen_codes: set[str] = set()
+
+    # Match row pattern: row_num  product_name  code  unit  qty  price  total
+    row_re = re.compile(
+        r'\b(\d{1,3})\s+'                          # row number
+        r'(.+?)\s+'                                 # product name (non-greedy)
+        r'(\d{4,6}|[A-Z]{2,4}\s*\d{2,4})\s+'      # code
+        r'(?:БР|PCS|SET|бр)[.\s]+'                 # unit
+        r'(\d+)\s+'                                 # qty
+        r'([\d.]+)\s+'                              # unit price
+        r'([\d.]+)',                                # total
+        re.IGNORECASE
+    )
+    for m in row_re.finditer(text):
+        code_raw = re.sub(r'\s+', ' ', m.group(3)).strip()
+        code = f"AVM-{code_raw}"
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        name = re.sub(r'\s+', ' ', m.group(2)).strip()[:120]
+        qty  = m.group(4)
+        try:
+            price_str = f"{float(m.group(5)):.2f}"
+        except ValueError:
+            price_str = None
+        try:
+            total_str = f"{float(m.group(6)):.2f}"
+        except ValueError:
+            total_str = None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name or None
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("AutoMania text: code=%s qty=%s total=%s", code, qty, total_str)
+
+    return records
+
+
+def extract_automania_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("AutoMania: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_automania_table(table))
+    if records:
+        logger.info("AutoMania: %d records from tables", len(records))
+        return records
+
+    if text:
+        records = _parse_automania_from_text(text)
+        logger.info("AutoMania text extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Kegel-Błażusiak
 # ---------------------------------------------------------------------------
 
@@ -4417,6 +4539,14 @@ class FieldMapper:
             records = extract_geyer_hosaja_products(tables, text)
             if records:
                 logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
+                return records
+
+        # Step 0r — AutoMania (explicit selection or auto-detection)
+        if supplier == "automania" or (supplier == "auto" and _is_automania_document(text)):
+            _specific_tried = True
+            records = extract_automania_products(tables, text)
+            if records:
+                logger.info("Extraction method: AutoMania (%d records)", len(records))
                 return records
 
         # Step 0q — Kegel-Błażusiak (explicit selection or auto-detection)

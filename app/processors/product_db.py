@@ -417,6 +417,7 @@ _petex_db:         Optional[SupplierNameDatabase] = None
 _gh_db:            Optional[SupplierNameDatabase] = None
 _frogum_db:        Optional[SupplierNameDatabase] = None
 _kegel_db:         Optional[SupplierNameDatabase] = None
+_automania_db:     Optional[SupplierNameDatabase] = None
 
 
 def get_maxton_db(data_dir: str) -> SupplierNameDatabase:
@@ -555,3 +556,11 @@ def get_kegel_blazusiak_db(data_dir: str) -> SupplierNameDatabase:
         _kegel_db = SupplierNameDatabase(data_dir, "kegel-products.xlsx")
         _kegel_db.load()
     return _kegel_db
+
+
+def get_automania_db(data_dir: str) -> SupplierNameDatabase:
+    global _automania_db
+    if _automania_db is None:
+        _automania_db = SupplierNameDatabase(data_dir, "automania-products.xlsx")
+        _automania_db.load()
+    return _automania_db
