@@ -4106,6 +4106,163 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Hakr (ASN HAKR Brno s.r.o.)
+# ---------------------------------------------------------------------------
+
+def _is_hakr_document(text: str) -> bool:
+    return bool(re.search(r'hakr\s*brno|hakrbrno\.cz|ASN\s+HAKR', text, re.IGNORECASE))
+
+
+def _parse_hakr_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Hakr invoice.
+
+    Columns: Description (CODE:Name) | Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
+    """
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row to determine column indices
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "description" in joined and ("q'ty" in joined or "qty" in joined or "quantity" in joined):
+            header_idx = i
+            break
+
+    if header_idx is not None:
+        headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in table[header_idx]]
+        def find(kws):
+            for kw in kws:
+                for idx, h in enumerate(headers):
+                    if kw in h:
+                        return idx
+            return None
+        desc_idx  = find(["description"])
+        qty_idx   = find(["q'ty", "qty", "quantity"])
+        price_idx = find(["unit price", "unit"])
+        total_idx = find(["total"])
+        data_start = header_idx + 1
+    else:
+        desc_idx, qty_idx, price_idx, total_idx = 0, 1, 2, 7
+        data_start = 0
+
+    records = []
+    for row in table[data_start:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
+
+        desc = cell(desc_idx)
+        if not desc or ':' not in desc:
+            continue
+
+        # Split CODE:Name
+        colon = desc.index(':')
+        code_raw = desc[:colon].strip()
+        name     = desc[colon + 1:].strip()[:120] or None
+
+        # Validate code: starts with letters, followed by digits
+        if not re.match(r'^[A-Za-z]{1,4}\d{3,6}$', code_raw):
+            continue
+
+        # Qty: "2 pcs" → "2"
+        qty_raw = cell(qty_idx)
+        qty_m = re.match(r'(\d+)', qty_raw)
+        qty = qty_m.group(1) if qty_m else None
+
+        price_str = _kegel_num(cell(price_idx))
+        total_str = _kegel_num(cell(total_idx))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code_raw
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("Hakr table: code=%s qty=%s total=%s", code_raw, qty, total_str)
+
+    return records
+
+
+def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback for Hakr invoices."""
+    records = []
+    seen: set[str] = set()
+
+    # Each data row: CODE:Name  N pcs  unit_price  ...  total
+    row_re = re.compile(
+        r'\b([A-Z]{1,4}\d{3,6}):([^\n]+?)\s+'
+        r'(\d+)\s+pcs\s+'
+        r'([\d.]+)(?:\s+[\d.]+)?\s+'
+        r'([\d.]+)',
+        re.IGNORECASE
+    )
+    for m in row_re.finditer(text):
+        code = m.group(1).strip()
+        if code in seen:
+            continue
+        seen.add(code)
+
+        name = m.group(2).strip()[:120]
+        qty = m.group(3)
+        try:
+            price_str = f"{float(m.group(4)):.2f}"
+        except ValueError:
+            price_str = None
+        try:
+            total_str = f"{float(m.group(5)):.2f}"
+        except ValueError:
+            total_str = None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name or None
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + ' EUR'
+        if total_str:
+            rec.total_price = total_str + ' EUR'
+
+        records.append(rec)
+        logger.info("Hakr text: code=%s qty=%s total=%s", code, qty, total_str)
+
+    return records
+
+
+def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Hakr: %d table(s) received", len(tables))
+    raw: list[ProductRecord] = []
+    for table in tables:
+        raw.extend(_parse_hakr_table(table))
+
+    seen: set[str] = set()
+    records = []
+    for rec in raw:
+        if rec.product_code not in seen:
+            seen.add(rec.product_code)
+            records.append(rec)
+
+    if records:
+        logger.info("Hakr: %d records from tables", len(records))
+        return records
+
+    if text:
+        records = _parse_hakr_from_text(text)
+        logger.info("Hakr text extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # AutoMania
 # ---------------------------------------------------------------------------
 
@@ -4550,7 +4707,15 @@ class FieldMapper:
                 logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
                 return records
 
-        # Step 0r — AutoMania (explicit selection or auto-detection)
+        # Step 0r — Hakr / ASN HAKR Brno (explicit selection or auto-detection)
+        if supplier == "hakr" or (supplier == "auto" and _is_hakr_document(text)):
+            _specific_tried = True
+            records = extract_hakr_products(tables, text)
+            if records:
+                logger.info("Extraction method: Hakr (%d records)", len(records))
+                return records
+
+        # Step 0s — AutoMania (explicit selection or auto-detection)
         if supplier == "automania" or (supplier == "auto" and _is_automania_document(text)):
             _specific_tried = True
             records = extract_automania_products(tables, text)

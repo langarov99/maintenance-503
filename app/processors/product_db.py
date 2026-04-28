@@ -570,3 +570,14 @@ def get_automania_db(data_dir: str) -> SupplierNameDatabase:
                                              strip_prefix="AVM-")
         _automania_db.load()
     return _automania_db
+
+
+_hakr_db: Optional[SupplierNameDatabase] = None
+
+
+def get_hakr_db(data_dir: str) -> SupplierNameDatabase:
+    global _hakr_db
+    if _hakr_db is None:
+        _hakr_db = SupplierNameDatabase(data_dir, "hark-products.xlsx")
+        _hakr_db.load()
+    return _hakr_db
