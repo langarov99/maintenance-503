@@ -366,7 +366,12 @@ class SupplierNameDatabase:
         key = code.strip().upper()
         if self._strip_prefix and key.startswith(self._strip_prefix):
             key = key[len(self._strip_prefix):]
-        return self._by_code.get(key)
+        result = self._by_code.get(key)
+        if result is None and re.match(r'^[A-Z]{2,6}-', key):
+            # Fallback: catalog entry may lack the leading alpha prefix (e.g. 'AMIO-SED31269' → 'SED31269')
+            fallback_key = key.split('-', 1)[1]
+            result = self._by_code.get(fallback_key)
+        return result
 
     def lookup_by_desc_words(self, words: list[str],
                               min_overlap: int = 3,
