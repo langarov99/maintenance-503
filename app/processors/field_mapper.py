@@ -1728,6 +1728,9 @@ def _parse_mafra_from_text(text: str) -> list[ProductRecord]:
 
 def extract_mafra_products(tables: list, text: str = "", text2: str = "") -> list[ProductRecord]:
     logger.info("Ma*Fra: %d table(s) received", len(tables))
+    for ti, table in enumerate(tables):
+        logger.info("Ma*Fra table[%d] (%d rows): first row=%r", ti, len(table),
+                    [str(c or "")[:40] for c in (table[0] if table else [])])
 
     # Try table extraction first (real PDF tables)
     records = []
