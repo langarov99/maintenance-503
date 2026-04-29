@@ -3101,6 +3101,10 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
 
 def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Rigum: %d table(s) received", len(tables))
+    logger.info("Rigum text first 600 chars:\n%s", text[:600])
+    for ti, table in enumerate(tables[:3]):
+        for ri, row in enumerate(table[:3]):
+            logger.info("Rigum table[%d] row[%d]: %s", ti, ri, [str(c or "")[:50] for c in row])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
