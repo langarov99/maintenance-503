@@ -47,8 +47,9 @@ If Err.Number = 0 And oHTTP.Status = 200 Then
 End If
 On Error GoTo 0
 
-' ── Kill any lingering process on port 5000 ───────────────────────────────────
-oShell.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon 2^>nul ^| findstr "":5000 ""') do taskkill /F /PID %a 2>nul", 0, True
+' ── Kill any lingering process on port 5000 ─────────────────────────────────
+oShell.Run "powershell -NoProfile -Command ""Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }""", 0, True
+WScript.Sleep 2000
 
 ' ── Start uvicorn hidden (window style 0 = no CMD window) ────────────────────
 sCmd = """" & sPython & """ -m uvicorn app.main:app " & _
