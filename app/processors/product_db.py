@@ -654,3 +654,14 @@ def get_senax_db(data_dir: str) -> SupplierNameDatabase:
         _senax_db = SupplierNameDatabase(data_dir, "sonax-products.xlsx")
         _senax_db.load()
     return _senax_db
+
+
+_heko_db: Optional[SupplierNameDatabase] = None
+
+
+def get_heko_db(data_dir: str) -> SupplierNameDatabase:
+    global _heko_db
+    if _heko_db is None:
+        _heko_db = SupplierNameDatabase(data_dir, "heko-products.xlsx")
+        _heko_db.load()
+    return _heko_db

@@ -4907,6 +4907,77 @@ def extract_senax_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Heko / Team Heko
+# ---------------------------------------------------------------------------
+
+def _is_heko_document(text: str) -> bool:
+    return bool(re.search(r'\bHEKO\b|СПЕСИФИКАЦИЯ\s+КЪМ\s+ПОРЪЧКА|team[\s\-]?heko', text, re.IGNORECASE))
+
+
+def _heko_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_heko_table(table: list[list]) -> list[ProductRecord]:
+    """Parse Heko order specification Excel table.
+
+    Columns (0-based): A=name, B=code, C=price_vat, D=price_net, E=qty, F=total_net
+    Header rows and empty rows are skipped.
+    Code gets HK- prefix.
+    """
+    if not table:
+        return []
+
+    records = []
+    for row in table:
+        if len(row) < 5:
+            continue
+
+        def cell(i):
+            return re.sub(r'\s+', ' ', str(row[i] or "")).strip() if i < len(row) else ""
+
+        code_raw = cell(1)
+        # Skip header / empty rows — code must be numeric
+        if not re.match(r'^\d+$', code_raw):
+            continue
+
+        name      = cell(0) or None
+        code      = "HK-" + code_raw
+        price_str = _heko_num(cell(3))   # Цена без ДДС
+        qty_str   = cell(4) or None
+        total_str = _heko_num(cell(5))   # Ст-ст без ДДС
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name
+        if qty_str:
+            rec.quantity = qty_str
+        if price_str:
+            rec.price = price_str + " лв."
+        if total_str:
+            rec.total_price = total_str + " лв."
+
+        records.append(rec)
+        logger.info("Heko table: code=%s name=%r qty=%s total=%s", code, name, qty_str, total_str)
+
+    return records
+
+
+def extract_heko_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Heko: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_heko_table(table))
+    if records:
+        logger.info("Heko: %d records from tables", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -5101,6 +5172,14 @@ class FieldMapper:
             records = extract_senax_products(tables, text)
             if records:
                 logger.info("Extraction method: Sonax (%d records)", len(records))
+                return records
+
+        # Step 0v — Heko / Team Heko (explicit selection or auto-detection)
+        if supplier == "team_heko" or (supplier == "auto" and _is_heko_document(text)):
+            _specific_tried = True
+            records = extract_heko_products(tables, text)
+            if records:
+                logger.info("Extraction method: Heko (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
