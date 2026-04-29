@@ -4767,7 +4767,7 @@ def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
     """Parse one pdfplumber table from a Senax/Sonax invoice.
 
     Expected columns: No. | Наименование (code + dash + name) | Кол. | Мярка | Ед. цена | Стойност
-    The description cell contains: '01744000 - Xtreme бързо керамично покритие стъкла 2в1, 750ml'
+    Returns [] when pdfplumber has merged multiple rows into one cell.
     """
     if not table or len(table) < 2:
         return []
@@ -4789,15 +4789,18 @@ def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
         if not desc_text:
             continue
 
+        # If the cell contains more than one code, pdfplumber merged multiple rows — skip
+        if len(_SENAX_CODE_RE.findall(desc_text)) > 1:
+            logger.info("Senax: merged table cell detected — will use text fallback")
+            return []
+
         m = _SENAX_CODE_RE.search(desc_text)
         if not m:
             continue
 
         code = m.group(1)
-        # Name follows the code, separated by " - "
         after_code = desc_text[m.end():].strip()
         name = re.sub(r'^[\s\-–—]+', '', after_code).strip() or None
-        # Clean up multiline whitespace
         if name:
             name = re.sub(r'\s+', ' ', name)[:150]
 
@@ -4806,8 +4809,6 @@ def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
                 return ""
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
 
-        # Determine column positions relative to desc_idx
-        # Layout: [0]=No, [desc_idx]=Наименование, [desc_idx+1]=Qty, [desc_idx+2]=Мярка, [desc_idx+3]=Ед.цена, [desc_idx+4]=Стойност
         qty       = cell(desc_idx + 1) or None
         price_str = _senax_num(cell(desc_idx + 3))
         total_str = _senax_num(cell(desc_idx + 4))
@@ -4829,27 +4830,50 @@ def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
 
 
 def _parse_senax_from_text(text: str) -> list[ProductRecord]:
-    """Text fallback — parses lines like '1 01744000 - Xtreme бързо ... 6 бр 6.80 40.78'."""
+    """Chunk-based text parser: splits text at each 8-digit code boundary.
+
+    For each code, takes the text up to the next code and looks for:
+    qty + unit (бр) + price + total at the end of the chunk.
+    """
     records: list[ProductRecord] = []
     seen: set[str] = set()
 
-    # Pattern: optional leading number, 8-digit code, dash, name, qty, unit, price, total
-    line_re = re.compile(
-        r'(?:^\d+\s+)?(\d{8})\s*[-–—]\s*(.+?)\s+'
-        r'(\d+(?:[,\.]\d+)?)\s+(?:бр\.?|pcs\.?|szt\.?|set|kpl\.?)\s+'
-        r'([\d\s,\.]+?)\s+([\d\s,\.]+?)\s*$',
-        re.IGNORECASE | re.MULTILINE,
+    logger.info("Senax text fallback — first 500 chars:\n%s", text[:500])
+
+    # All positions of 8-digit codes in the full text
+    code_positions = [(m.start(), m.group(1)) for m in _SENAX_CODE_RE.finditer(text)]
+    if not code_positions:
+        logger.warning("Senax: no 8-digit codes found in text")
+        return records
+
+    qty_price_re = re.compile(
+        r'(\d+(?:[,\.]\d+)?)\s+(?:бр\.?|pcs\.?|szt\.?|set)\s+([\d,\.]+)\s+([\d,\.]+)',
+        re.IGNORECASE,
     )
 
-    for m in line_re.finditer(text):
-        code = m.group(1)
+    for idx, (pos, code) in enumerate(code_positions):
         if code in seen:
             continue
         seen.add(code)
-        name = re.sub(r'\s+', ' ', m.group(2)).strip()[:150] or None
-        qty  = m.group(3).strip() or None
-        price_str = _senax_num(m.group(4))
-        total_str = _senax_num(m.group(5))
+
+        # Chunk: from this code to the next code occurrence (or end of text)
+        end_pos = code_positions[idx + 1][0] if idx + 1 < len(code_positions) else len(text)
+        chunk = text[pos:end_pos]
+
+        # Strip the code itself and the " - " separator
+        after_code = re.sub(r'^\d{8}\s*[-–—]\s*', '', chunk).strip()
+
+        pm = qty_price_re.search(after_code)
+        if pm:
+            name_raw = after_code[:pm.start()].strip()
+            qty       = pm.group(1)
+            price_str = _senax_num(pm.group(2))
+            total_str = _senax_num(pm.group(3))
+        else:
+            name_raw  = after_code
+            qty = price_str = total_str = None
+
+        name = re.sub(r'\s+', ' ', name_raw).strip()[:150] or None
 
         rec = ProductRecord(extraction_method="text")
         rec.product_code = code
@@ -4861,7 +4885,8 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         if total_str:
             rec.total_price = total_str + " лв."
         records.append(rec)
-        logger.info("Senax text: code=%s name=%r qty=%s", code, name, qty)
+        logger.info("Senax text: code=%s name=%r qty=%s price=%s total=%s",
+                    code, name, qty, price_str, total_str)
 
     return records
 
