@@ -15,6 +15,7 @@ COLUMNS = [
     ("",                        "price_cur",        8),
     ("ОБЩА СУМА",               "total_val",       14),  # merged with total_cur
     ("",                        "total_cur",        8),
+    ("Нов продукт",             "is_new_product",  14),
     ("Име на продукта",         "product_name",    40),
     ("EAN / Баркод",            "ean",             18),
     ("Килограми (бруто/нето)",  "weight_kg",       22),
@@ -57,6 +58,7 @@ def _get_value(rec: ProductRecord, field_name: str) -> str:
     if field_name == "price_cur":     return _split(rec.price      or "")[1]
     if field_name == "total_val":     return _split(rec.total_price or "")[0]
     if field_name == "total_cur":     return _split(rec.total_price or "")[1]
+    if field_name == "is_new_product": return "Да" if rec.is_new_product else "Не"
     return getattr(rec, field_name, None) or ""
 
 

@@ -21,6 +21,7 @@ class ProductRecord:
     weight_kg: Optional[str] = None         # Колона 7
     parts_in_set: Optional[str] = None      # Колона 8
     color: Optional[str] = None             # Колона 9
+    is_new_product: bool = True             # Да = не е намерен в каталога на доставчика
     extraction_method: str = "regex"
 
     def filled_count(self) -> int:

@@ -350,9 +350,11 @@ async def extract(
                 enriched_n = 0
                 for rec in records:
                     info = name_db.lookup(rec.product_code)
-                    if info and info.description:
-                        rec.product_name = info.description
-                        enriched_n += 1
+                    if info:
+                        rec.is_new_product = False
+                        if info.description:
+                            rec.product_name = info.description
+                            enriched_n += 1
                 if enriched_n:
                     logger.info("%s: name DB enriched %d records", supplier, enriched_n)
 
