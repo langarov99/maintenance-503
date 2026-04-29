@@ -662,6 +662,7 @@ _heko_db: Optional[SupplierNameDatabase] = None
 def get_heko_db(data_dir: str) -> SupplierNameDatabase:
     global _heko_db
     if _heko_db is None:
-        _heko_db = SupplierNameDatabase(data_dir, "heko-products.xlsx")
+        _heko_db = SupplierNameDatabase(data_dir, "heko-products.xlsx",
+                                        strip_prefix="HK-")
         _heko_db.load()
     return _heko_db
