@@ -538,20 +538,24 @@ def _is_rezaw_plast_document(text: str) -> bool:
 
 
 def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
-    """Parse one PDF table from a Rezaw-Plast price list.
+    """Parse one PDF table from a Rezaw-Plast invoice or price list.
 
-    Expected columns: Description | Years of production | Article number | Net Price | EAN CODE
-    Blue brand-header rows have no article number — tracked as context only.
+    Supports two formats:
+    - Price list: Description | Years | Article number | Net Price | EAN CODE
+    - Invoice:    Lp | Indeks/Article | Product name | unit | Quantity | Unit price | Discount | Net price | Net value | VAT
     """
     if not table or len(table) < 2:
         return []
 
-    # Locate header row by looking for 'article' and 'ean' keywords.
-    # Search the full table — Excel files may have many preamble rows before headers.
+    # Locate header row — accept 'article' paired with 'ean'/'code' (price list)
+    # or 'quantity'/'ilość' (invoice format without EAN).
     header_idx = None
     for i, row in enumerate(table):
         joined = " ".join(str(c or "").lower() for c in row)
-        if "article" in joined and ("ean" in joined or "code" in joined):
+        if "article" in joined and (
+            "ean" in joined or "code" in joined
+            or "quantity" in joined or "ilość" in joined
+        ):
             header_idx = i
             break
     if header_idx is None:
@@ -569,15 +573,40 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
                     return i
         return None
 
-    desc_idx  = 0                                          # always first column
-    art_idx   = find(["article", "арт", "number", "номер", "kod", "code"])
-    price_idx = find(["price", "цена", "preis", "net"])
+    desc_idx  = find(["product", "nazwa", "description", "desc", "opis"])
+    if desc_idx is None:
+        desc_idx = 0
+    art_idx   = find(["article", "арт", "number", "номер", "indeks", "kod", "code"])
+    qty_idx   = find(["quantity", "ilość"])
+    # Prefer discounted net price over unit price (invoice has both columns)
+    price_idx = find(["net price", "unit price", "price", "цена", "preis"])
     ean_idx   = find(["ean", "баркод", "barcode", "gtin"])
+    total_idx = find(["net value", "wartość", "total", "нв"])
     years_idx = find(["year", "production", "год"])
     pcs_idx   = find(["pcs", "pieces", "set", "parts", "бр", "стелки", "количество"])
 
     if art_idx is None:
         return []
+
+    def parse_money(raw: str) -> str:
+        """Parse European-format price strings like '13,90 EUR' or '13.90'."""
+        if not raw or not raw.strip():
+            return ""
+        m = re.match(r'^([\d\s.,]+)\s*([A-Za-z]+)?$', raw.strip())
+        if not m:
+            return ""
+        num_str = m.group(1).strip()
+        currency = (m.group(2) or "EUR").upper()
+        # European format: comma = decimal separator, dot = thousands
+        if ',' in num_str:
+            num_str = num_str.replace(' ', '').replace('.', '').replace(',', '.')
+        else:
+            num_str = num_str.replace(' ', '').replace(',', '')
+        try:
+            float(num_str)
+        except ValueError:
+            return ""
+        return f"{num_str} {currency}"
 
     records = []
     for row in table[header_idx + 1:]:
@@ -607,22 +636,33 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
         if name_parts:
             rec.product_name = " | ".join(name_parts)[:120]
 
+        # Quantity (invoice format: plain integer like "2")
+        if qty_idx is not None:
+            qty_raw = cell(qty_idx).strip()
+            if qty_raw and re.match(r'^\d+$', qty_raw):
+                rec.quantity = qty_raw + " pcs"
+
         # Price
-        price_raw = cell(price_idx) if price_idx is not None else ""
-        if price_raw and re.match(r'^\d+[.,]\d+$', price_raw):
-            rec.price = price_raw.replace(",", ".") + " EUR"
+        if price_idx is not None:
+            rec.price = parse_money(cell(price_idx))
+
+        # Total
+        if total_idx is not None:
+            rec.total_price = parse_money(cell(total_idx))
 
         # EAN
-        ean_raw = cell(ean_idx) if ean_idx is not None else ""
-        if re.match(r'^\d{8,14}$', ean_raw):
-            rec.ean = ean_raw
+        if ean_idx is not None:
+            ean_raw = cell(ean_idx)
+            if re.match(r'^\d{8,14}$', ean_raw):
+                rec.ean = ean_raw
 
         # Pieces in set — extract leading number from e.g. "3-pcs (1 and 2 row of seats)"
-        pcs_raw = cell(pcs_idx) if pcs_idx is not None else ""
-        if pcs_raw and pcs_raw.strip():
-            pcs_m = re.match(r'^(\d+)', pcs_raw.strip())
-            if pcs_m:
-                rec.parts_in_set = pcs_m.group(1)
+        if pcs_idx is not None:
+            pcs_raw = cell(pcs_idx)
+            if pcs_raw and pcs_raw.strip():
+                pcs_m = re.match(r'^(\d+)', pcs_raw.strip())
+                if pcs_m:
+                    rec.parts_in_set = pcs_m.group(1)
 
         records.append(rec)
 
