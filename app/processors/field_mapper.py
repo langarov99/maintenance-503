@@ -2909,7 +2909,7 @@ def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[Product
 # ---------------------------------------------------------------------------
 
 # Group 1 = 6-digit product code; group 2 = rest of line (description on invoice)
-_RIGUM_CODE_RE = re.compile(r'^(\d{6}):[A-Z0-9]+(?:-[A-Z]+)?\s*(.*)', re.UNICODE)
+_RIGUM_CODE_RE = re.compile(r'(?:^|\s)(\d{6}):[A-Z0-9]+(?:-[A-Z0-9]+)?\s*(.*)', re.UNICODE)
 
 
 def _is_rigum_document(text: str) -> bool:
@@ -2958,7 +2958,7 @@ def _parse_rigum_table(table: list[list]) -> list[ProductRecord]:
             return str(row[ci] or "").strip()
 
         desc_raw = cell(desc_idx)
-        m = _RIGUM_CODE_RE.match(desc_raw)
+        m = _RIGUM_CODE_RE.search(desc_raw)
         if not m:
             continue
 
@@ -3022,7 +3022,7 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        m = _RIGUM_CODE_RE.match(line)
+        m = _RIGUM_CODE_RE.search(line)
         if not m:
             i += 1
             continue
@@ -3042,7 +3042,7 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
             if not nl:
                 j += 1
                 continue
-            if _RIGUM_CODE_RE.match(nl):
+            if _RIGUM_CODE_RE.search(nl):
                 break
             extra_lines.append(nl)
             j += 1
