@@ -108,34 +108,52 @@
     #results { display: none; }
     .result-header {
       display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 16px; flex-wrap: wrap; gap: 10px;
+      margin-bottom: 0; flex-wrap: wrap; gap: 10px;
+      padding-bottom: 14px; border-bottom: 1px solid #eee;
     }
     .result-header h2 { font-size: 1rem; color: #1a1a1a; font-weight: 700; }
-    #downloadBtn {
-      padding: 8px 20px; background: #27ae60; color: #fff;
-      border: none; border-radius: 6px; font-weight: 700; cursor: pointer;
-      font-size: .9rem; text-decoration: none; display: inline-block;
-    }
 
-    /* Export options */
-    .export-options { display: flex; flex-direction: column; gap: 8px; }
-    .export-radio-row { display: flex; gap: 20px; flex-wrap: wrap; }
+    /* Export panel */
+    .export-panel {
+      background: #f8f8f8; border: 1px solid #e5e5e5; border-radius: 8px;
+      padding: 18px 20px; margin: 16px 0;
+    }
+    .export-panel-title {
+      font-size: .8rem; font-weight: 700; color: #666;
+      text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px;
+    }
+    .export-radio-row { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 4px; }
     .export-radio-row label {
-      display: flex; align-items: center; gap: 6px;
-      font-size: .88rem; font-weight: 600; cursor: pointer; color: #333;
+      display: flex; align-items: center; gap: 8px;
+      font-size: .95rem; font-weight: 600; cursor: pointer; color: #1a1a1a;
     }
-    .export-radio-row input[type="radio"] { accent-color: #CC0000; width: 16px; height: 16px; }
+    .export-radio-row input[type="radio"] { accent-color: #CC0000; width: 17px; height: 17px; }
     #columnSelector {
-      display: none; background: #f7f7f7; border: 1px solid #ddd;
-      border-radius: 8px; padding: 12px 16px; margin-top: 4px;
+      display: none; margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid #e0e0e0;
     }
-    #columnSelector p { font-size: .8rem; color: #666; margin-bottom: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
-    .col-checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+    #columnSelector p {
+      font-size: .8rem; color: #666; margin-bottom: 10px;
+      font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+    }
+    .col-checks {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px 12px;
+    }
     .col-checks label {
-      display: flex; align-items: center; gap: 5px;
-      font-size: .85rem; cursor: pointer; color: #333;
+      display: flex; align-items: center; gap: 7px;
+      font-size: .9rem; cursor: pointer; color: #1a1a1a;
+      background: #fff; border: 1px solid #ddd; border-radius: 6px;
+      padding: 6px 10px; transition: border-color .15s;
     }
-    .col-checks input[type="checkbox"] { accent-color: #27ae60; width: 15px; height: 15px; }
+    .col-checks label:hover { border-color: #27ae60; }
+    .col-checks input[type="checkbox"] { accent-color: #27ae60; width: 15px; height: 15px; flex-shrink: 0; }
+    #downloadBtn {
+      width: 100%; padding: 13px; background: #27ae60; color: #fff;
+      border: none; border-radius: 6px; font-weight: 700; cursor: pointer;
+      font-size: 1rem; letter-spacing: .5px; margin-top: 14px;
+      transition: opacity .2s;
+    }
+    #downloadBtn:hover { opacity: .88; }
 
     /* Table */
     .table-wrap { overflow-x: auto; border-radius: 8px; }
@@ -227,33 +245,32 @@
     <div class="card" id="results">
       <div class="result-header">
         <h2>Резултати <span id="methodBadge"></span></h2>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
-          <div class="export-options">
-            <div class="export-radio-row">
-              <label><input type="radio" name="exportType" value="standard" checked> Стандартен експорт</label>
-              <label><input type="radio" name="exportType" value="custom"> Персонализиран експорт</label>
-            </div>
-            <div id="columnSelector">
-              <p>Изберете колони за експорт:</p>
-              <div class="col-checks">
-                <label><input type="checkbox" value="product_code"> Код на продукта</label>
-                <label><input type="checkbox" value="quantity_num"> Количество</label>
-                <label><input type="checkbox" value="quantity_unit"> М.ед.</label>
-                <label><input type="checkbox" value="price_val"> Цена за брой</label>
-                <label><input type="checkbox" value="price_cur"> Валута (цена)</label>
-                <label><input type="checkbox" value="total_val"> Обща сума</label>
-                <label><input type="checkbox" value="total_cur"> Валута (сума)</label>
-                <label><input type="checkbox" value="is_new_product"> Нов продукт</label>
-                <label><input type="checkbox" value="product_name"> Име на продукта</label>
-                <label><input type="checkbox" value="ean"> EAN / Баркод</label>
-                <label><input type="checkbox" value="weight_kg"> Кг (бруто/нето)</label>
-                <label><input type="checkbox" value="parts_in_set"> Бр. в комплект</label>
-                <label><input type="checkbox" value="color"> Цвят</label>
-              </div>
-            </div>
-          </div>
-          <button id="downloadBtn">&#11015; Свали Excel</button>
+      </div>
+      <div class="export-panel">
+        <div class="export-panel-title">Формат на експорта</div>
+        <div class="export-radio-row">
+          <label><input type="radio" name="exportType" value="standard" checked> Стандартен експорт</label>
+          <label><input type="radio" name="exportType" value="custom"> Персонализиран експорт</label>
         </div>
+        <div id="columnSelector">
+          <p>Изберете колони:</p>
+          <div class="col-checks">
+            <label><input type="checkbox" value="product_code"> Код на продукта</label>
+            <label><input type="checkbox" value="quantity_num"> Количество</label>
+            <label><input type="checkbox" value="quantity_unit"> М.ед.</label>
+            <label><input type="checkbox" value="price_val"> Цена за брой</label>
+            <label><input type="checkbox" value="price_cur"> Валута (цена)</label>
+            <label><input type="checkbox" value="total_val"> Обща сума</label>
+            <label><input type="checkbox" value="total_cur"> Валута (сума)</label>
+            <label><input type="checkbox" value="is_new_product"> Нов продукт</label>
+            <label><input type="checkbox" value="product_name"> Име на продукта</label>
+            <label><input type="checkbox" value="ean"> EAN / Баркод</label>
+            <label><input type="checkbox" value="weight_kg"> Кг (бруто/нето)</label>
+            <label><input type="checkbox" value="parts_in_set"> Бр. в комплект</label>
+            <label><input type="checkbox" value="color"> Цвят</label>
+          </div>
+        </div>
+        <button id="downloadBtn">&#11015; Свали Excel</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -457,6 +474,7 @@
     currentOutputFile = data.output_file;
     resultsCard.style.display = 'block';
     showAlert(data.message, 'success');
+    setTimeout(() => resultsCard.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   }
 
   function showAlert(msg, type) {
