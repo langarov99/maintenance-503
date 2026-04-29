@@ -216,7 +216,7 @@ async def extract(
                     if not info:
                         continue
                     rec.is_new_product = False
-                    if not rec.product_name and info.description:
+                    if info.description:
                         rec.product_name = info.description
                     if not rec.ean and info.ean:
                         rec.ean = info.ean
