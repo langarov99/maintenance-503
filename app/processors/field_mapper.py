@@ -3101,10 +3101,6 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
 
 def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Rigum: %d table(s) received", len(tables))
-    logger.info("Rigum text first 600 chars:\n%s", text[:600])
-    for ti, table in enumerate(tables[:3]):
-        for ri, row in enumerate(table[:3]):
-            logger.info("Rigum table[%d] row[%d]: %s", ti, ri, [str(c or "")[:50] for c in row])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
@@ -4994,11 +4990,13 @@ def extract_heko_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 class FieldMapper:
     def __init__(self, llm=None):
-        self.llm = llm  # Optional llama-cpp-python Llama instance
+        self.llm = llm
+        self.last_detected_supplier = "auto"
 
     def map(self, extracted: dict, supplier: str = "auto") -> list[ProductRecord]:
         tables = extracted.get("tables", [])
         text = extracted.get("text", "")
+        self.last_detected_supplier = supplier
 
         logger.info("Extraction requested: supplier=%s", supplier)
 
@@ -5013,6 +5011,7 @@ class FieldMapper:
             if text:
                 records = extract_osram_products(text)
                 if records:
+                    self.last_detected_supplier = "osram"
                     logger.info("Extraction method: OSRAM-specific (%d records)", len(records))
                     return records
 
@@ -5021,6 +5020,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_rezaw_plast_products(tables, text)
             if records:
+                self.last_detected_supplier = "rezaw_plast"
                 logger.info("Extraction method: Rezaw-Plast (%d records)", len(records))
                 return records
 
@@ -5029,6 +5029,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_avisa_products(tables, text)
             if records:
+                self.last_detected_supplier = "avisa"
                 logger.info("Extraction method: Avisa (%d records)", len(records))
                 return records
 
@@ -5037,6 +5038,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_amio_products(tables, text)
             if records:
+                self.last_detected_supplier = "amio"
                 logger.info("Extraction method: Amio (%d records)", len(records))
                 return records
 
@@ -5045,6 +5047,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_maxton_products(tables, text)
             if records:
+                self.last_detected_supplier = "maxton_design"
                 logger.info("Extraction method: Maxton Design (%d records)", len(records))
                 return records
 
@@ -5053,6 +5056,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_mtech_products(tables, text)
             if records:
+                self.last_detected_supplier = "mtech"
                 logger.info("Extraction method: M-Tech (%d records)", len(records))
                 return records
 
@@ -5062,6 +5066,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_mafra_products(tables, text, text2)
             if records:
+                self.last_detected_supplier = "mafra"
                 logger.info("Extraction method: Ma*Fra (%d records)", len(records))
                 return records
 
@@ -5070,6 +5075,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_amal_plast_products(tables, text)
             if records:
+                self.last_detected_supplier = "amal_plast"
                 logger.info("Extraction method: Amal-Plast (%d records)", len(records))
                 return records
 
@@ -5078,6 +5084,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_car_passion_products(tables, text)
             if records:
+                self.last_detected_supplier = "car_passion"
                 logger.info("Extraction method: Car Passion (%d records)", len(records))
                 return records
 
@@ -5086,6 +5093,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_vinove_products(tables, text)
             if records:
+                self.last_detected_supplier = "vinove"
                 logger.info("Extraction method: Vinove (%d records)", len(records))
                 return records
 
@@ -5094,6 +5102,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_gumarny_zubri_products(tables, text)
             if records:
+                self.last_detected_supplier = "gumarny_zubri"
                 logger.info("Extraction method: Gumarny Zubri (%d records)", len(records))
                 return records
 
@@ -5102,6 +5111,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_rigum_products(tables, text)
             if records:
+                self.last_detected_supplier = "rigum"
                 logger.info("Extraction method: Rigum (%d records)", len(records))
                 return records
 
@@ -5110,6 +5120,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_frogum_products(tables, text)
             if records:
+                self.last_detected_supplier = "frogum"
                 logger.info("Extraction method: Frogum (%d records)", len(records))
                 return records
 
@@ -5118,6 +5129,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_petex_products(tables, text)
             if records:
+                self.last_detected_supplier = "petex"
                 logger.info("Extraction method: Petex (%d records)", len(records))
                 return records
 
@@ -5126,6 +5138,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_gelly_plast_products(tables, text)
             if records:
+                self.last_detected_supplier = "gelly_plast"
                 logger.info("Extraction method: Gelly Plast (%d records)", len(records))
                 return records
 
@@ -5134,6 +5147,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_farad_products(tables, text)
             if records:
+                self.last_detected_supplier = "farad"
                 logger.info("Extraction method: Farad (%d records)", len(records))
                 return records
 
@@ -5142,6 +5156,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_geyer_hosaja_products(tables, text)
             if records:
+                self.last_detected_supplier = "geter_hosaja"
                 logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
                 return records
 
@@ -5150,6 +5165,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_hakr_products(tables, text)
             if records:
+                self.last_detected_supplier = "hakr"
                 logger.info("Extraction method: Hakr (%d records)", len(records))
                 return records
 
@@ -5158,6 +5174,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_automania_products(tables, text)
             if records:
+                self.last_detected_supplier = "automania"
                 logger.info("Extraction method: AutoMania (%d records)", len(records))
                 return records
 
@@ -5166,6 +5183,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_kegel_blazusiak_products(tables, text)
             if records:
+                self.last_detected_supplier = "kegel_blazusiak"
                 logger.info("Extraction method: Kegel-Blazusiak (%d records)", len(records))
                 return records
 
@@ -5174,6 +5192,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_tompar_products(tables, text)
             if records:
+                self.last_detected_supplier = "tompar"
                 logger.info("Extraction method: ToM-PaR (%d records)", len(records))
                 return records
 
@@ -5182,6 +5201,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_senax_products(tables, text)
             if records:
+                self.last_detected_supplier = "sonax"
                 logger.info("Extraction method: Sonax (%d records)", len(records))
                 return records
 
@@ -5190,6 +5210,7 @@ class FieldMapper:
             _specific_tried = True
             records = extract_heko_products(tables, text)
             if records:
+                self.last_detected_supplier = "team_heko"
                 logger.info("Extraction method: Heko (%d records)", len(records))
                 return records
 

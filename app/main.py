@@ -170,6 +170,7 @@ async def extract(
             extracted = await loop.run_in_executor(pool, extractor.extract, str(tmp_path))
         mapper = get_mapper()
         records = mapper.map(extracted, supplier=supplier)
+        effective_supplier = mapper.last_detected_supplier
 
         if not records:
             return {
@@ -181,7 +182,7 @@ async def extract(
 
         # Enrich records from product database (OSRAM)
         db = get_product_db(str(DATA_DIR))
-        if supplier in ("auto", "osram") and db.is_loaded:
+        if effective_supplier == "osram" and db.is_loaded:
             enriched = 0
             for rec in records:
                 am_code = getattr(rec, "_osram_article", None)
@@ -214,7 +215,7 @@ async def extract(
                 logger.info("Enriched %d records from product DB", enriched)
 
         # Enrich records from Rezaw-Plast product database
-        if supplier == "rezaw_plast":
+        if effective_supplier == "rezaw_plast":
             rp_db = get_rezaw_plast_db(str(DATA_DIR))
             if rp_db.is_loaded:
                 enriched_rp = 0
@@ -235,7 +236,7 @@ async def extract(
 
         # Amal-Plast: invoice uses AP codes, internal system uses SL codes
         # Convert before DB lookup: AP1101 → SL1101
-        if supplier == "amal_plast":
+        if effective_supplier == "amal_plast":
             for rec in records:
                 if rec.product_code and rec.product_code.upper().startswith("AP"):
                     suffix = rec.product_code[2:]
@@ -244,14 +245,14 @@ async def extract(
 
         # Car Passion: add CP- prefix so codes match the reference DB
         # Invoice: 20108 → DB: CP-20108
-        if supplier == "car_passion":
+        if effective_supplier == "car_passion":
             for rec in records:
                 if rec.product_code and not rec.product_code.upper().startswith("CP-"):
                     rec.product_code = "CP-" + rec.product_code
 
         # Gumarny Zubri: add GZ- prefix so codes match the reference DB
         # Invoice: 222349 → DB: GZ-222349
-        if supplier == "gumarny_zubri":
+        if effective_supplier == "gumarny_zubri":
             for rec in records:
                 if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
                     rec.product_code = "GZ-" + rec.product_code
@@ -260,7 +261,7 @@ async def extract(
         # The PDF/text parser captures the merged "1-<code> <italian desc>"
         # string as product_code.  We strip "1-", then try the longest catalog
         # key that is a complete prefix of the remainder to split code from desc.
-        if supplier == "farad":
+        if effective_supplier == "farad":
             import re as _re
             _farad_code_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
@@ -354,8 +355,8 @@ async def extract(
             "sonax":           get_senax_db,
             "team_heko":       get_heko_db,
         }
-        if supplier in _name_db_map:
-            name_db = _name_db_map[supplier](str(DATA_DIR))
+        if effective_supplier in _name_db_map:
+            name_db = _name_db_map[effective_supplier](str(DATA_DIR))
             if name_db.is_loaded:
                 enriched_n = 0
                 for rec in records:
@@ -366,11 +367,11 @@ async def extract(
                             rec.product_name = info.description
                             enriched_n += 1
                 if enriched_n:
-                    logger.info("%s: name DB enriched %d records", supplier, enriched_n)
+                    logger.info("%s: name DB enriched %d records", effective_supplier, enriched_n)
 
                 # Ma*Fra description-based recovery: scan OCR lines and match
                 # products whose code is unreadable but description is legible.
-                if supplier == "mafra":
+                if effective_supplier == "mafra":
                     import re as _re
                     # Cyrillic-lookalike → Latin (OCR confuses Cyrillic with Latin)
                     _NORM = str.maketrans({
@@ -453,7 +454,7 @@ async def extract(
             "output_file": Path(out_path).name,
             "extraction_source": extracted.get("source"),
             "text_lines": len(text_lines),
-            "supplier": supplier,
+            "supplier": effective_supplier,
         }
     finally:
         tmp_path.unlink(missing_ok=True)
