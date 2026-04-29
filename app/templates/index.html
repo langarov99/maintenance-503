@@ -117,6 +117,26 @@
       font-size: .9rem; text-decoration: none; display: inline-block;
     }
 
+    /* Export options */
+    .export-options { display: flex; flex-direction: column; gap: 8px; }
+    .export-radio-row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .export-radio-row label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: .88rem; font-weight: 600; cursor: pointer; color: #333;
+    }
+    .export-radio-row input[type="radio"] { accent-color: #CC0000; width: 16px; height: 16px; }
+    #columnSelector {
+      display: none; background: #f7f7f7; border: 1px solid #ddd;
+      border-radius: 8px; padding: 12px 16px; margin-top: 4px;
+    }
+    #columnSelector p { font-size: .8rem; color: #666; margin-bottom: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+    .col-checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+    .col-checks label {
+      display: flex; align-items: center; gap: 5px;
+      font-size: .85rem; cursor: pointer; color: #333;
+    }
+    .col-checks input[type="checkbox"] { accent-color: #27ae60; width: 15px; height: 15px; }
+
     /* Table */
     .table-wrap { overflow-x: auto; border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; font-size: .82rem; min-width: 700px; }
@@ -207,7 +227,30 @@
     <div class="card" id="results">
       <div class="result-header">
         <h2>Резултати <span id="methodBadge"></span></h2>
-        <a id="downloadBtn" href="#">&#11015; Свали Excel</a>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
+          <div class="export-options">
+            <div class="export-radio-row">
+              <label><input type="radio" name="exportType" value="standard" checked> Стандартен експорт</label>
+              <label><input type="radio" name="exportType" value="custom"> Персонализиран експорт</label>
+            </div>
+            <div id="columnSelector">
+              <p>Изберете колони за експорт:</p>
+              <div class="col-checks">
+                <label><input type="checkbox" value="product_code" checked> Код на продукта</label>
+                <label><input type="checkbox" value="quantity" checked> Количество</label>
+                <label><input type="checkbox" value="price" checked> Цена за брой</label>
+                <label><input type="checkbox" value="total_price" checked> Обща сума</label>
+                <label><input type="checkbox" value="is_new_product" checked> Нов продукт</label>
+                <label><input type="checkbox" value="product_name" checked> Име на продукта</label>
+                <label><input type="checkbox" value="ean" checked> EAN / Баркод</label>
+                <label><input type="checkbox" value="weight_kg" checked> Кг (бруто/нето)</label>
+                <label><input type="checkbox" value="parts_in_set" checked> Бр. в комплект</label>
+                <label><input type="checkbox" value="color" checked> Цвят</label>
+              </div>
+            </div>
+          </div>
+          <button id="downloadBtn">&#11015; Свали Excel</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
@@ -244,8 +287,17 @@
   const alertBox = document.getElementById('alertBox');
   const downloadBtn = document.getElementById('downloadBtn');
   const methodBadge = document.getElementById('methodBadge');
+  const columnSelector = document.getElementById('columnSelector');
+
+  // Export type toggle
+  document.querySelectorAll('input[name="exportType"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      columnSelector.style.display = radio.value === 'custom' ? 'block' : 'none';
+    });
+  });
 
   let selectedFile = null;
+  let currentOutputFile = null;
 
   // Drag & drop
   dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
@@ -396,8 +448,7 @@
       methodBadge.innerHTML += ` <span class="badge badge-table">${data.supplier_label || data.supplier}</span>`;
     }
 
-    downloadBtn.href = '/download/' + encodeURIComponent(data.output_file);
-    downloadBtn.download = data.output_file;
+    currentOutputFile = data.output_file;
     resultsCard.style.display = 'block';
     showAlert(data.message, 'success');
   }
@@ -405,6 +456,39 @@
   function showAlert(msg, type) {
     alertBox.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
   }
+
+  // Column group → actual field names
+  const FIELD_MAP = {
+    'product_code':  ['product_code'],
+    'quantity':      ['quantity_num', 'quantity_unit'],
+    'price':         ['price_val', 'price_cur'],
+    'total_price':   ['total_val', 'total_cur'],
+    'is_new_product':['is_new_product'],
+    'product_name':  ['product_name'],
+    'ean':           ['ean'],
+    'weight_kg':     ['weight_kg'],
+    'parts_in_set':  ['parts_in_set'],
+    'color':         ['color'],
+  };
+
+  downloadBtn.addEventListener('click', () => {
+    if (!currentOutputFile) return;
+    const exportType = document.querySelector('input[name="exportType"]:checked').value;
+    if (exportType === 'standard') {
+      const a = document.createElement('a');
+      a.href = '/download/' + encodeURIComponent(currentOutputFile);
+      a.download = currentOutputFile;
+      a.click();
+    } else {
+      const checked = [...document.querySelectorAll('#columnSelector input[type="checkbox"]:checked')];
+      if (checked.length === 0) { showAlert('Изберете поне една колона.', 'error'); return; }
+      const fields = checked.flatMap(cb => FIELD_MAP[cb.value] || []).join(',');
+      const a = document.createElement('a');
+      a.href = '/download-custom/' + encodeURIComponent(currentOutputFile) + '?fields=' + encodeURIComponent(fields);
+      a.download = currentOutputFile;
+      a.click();
+    }
+  });
 </script>
 </body>
 </html>

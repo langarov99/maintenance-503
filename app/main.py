@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -99,6 +99,7 @@ async def shutdown():
 # Global state — initialized lazily to avoid heavy startup cost
 _extractors: dict = {}
 _mapper: FieldMapper | None = None
+_records_cache: dict[str, list] = {}  # filename → records for custom export
 
 
 def get_extractor(file_type: str, languages: list[str]):
@@ -448,6 +449,7 @@ async def extract(
                 logger.info("Post-enrichment dedup: %d → %d records", pre, len(records))
 
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
+        _records_cache[Path(out_path).name] = records
 
         text_lines = [l for l in extracted.get("text", "").splitlines() if l.strip()]
         return {
@@ -471,6 +473,25 @@ async def download(filename: str):
     return FileResponse(
         path=str(file_path),
         filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/download-custom/{filename}")
+async def download_custom(filename: str, fields: str = Query(...)):
+    records = _records_cache.get(filename)
+    if not records:
+        raise HTTPException(404, "Записите не са намерени. Моля, направете ново извличане.")
+    include_fields = set(f.strip() for f in fields.split(",") if f.strip())
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        out_path = await loop.run_in_executor(
+            pool, lambda: write_excel(records, str(OUTPUT_DIR), filename, include_fields)
+        )
+    out_file = Path(out_path)
+    return FileResponse(
+        path=str(out_file),
+        filename=out_file.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 

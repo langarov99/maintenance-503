@@ -69,13 +69,22 @@ def _apply_header_style(cell):
     cell.border = CELL_BORDER
 
 
-def write_excel(records: list[ProductRecord], output_dir: str, source_filename: str) -> str:
+def write_excel(records: list[ProductRecord], output_dir: str, source_filename: str,
+                include_fields: set[str] | None = None) -> str:
+    # Filter active columns
+    active_cols = [(h, f, w) for h, f, w in COLUMNS
+                   if include_fields is None or f in include_fields]
+    active_fields = {f for _, f, _ in active_cols}
+    active_merged = [(f1, f2) for f1, f2 in _MERGED_PAIRS
+                     if f1 in active_fields and f2 in active_fields]
+    active_col_idx = {f: i + 1 for i, (_, f, _) in enumerate(active_cols)}
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Извлечени данни"
 
     # Header row
-    for col_idx, (header, _, width) in enumerate(COLUMNS, start=1):
+    for col_idx, (header, _, width) in enumerate(active_cols, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         _apply_header_style(cell)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
@@ -83,16 +92,16 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
     ws.row_dimensions[1].height = 30
 
     # Merge paired header columns
-    for first_field, second_field in _MERGED_PAIRS:
-        c1 = get_column_letter(_col(first_field))
-        c2 = get_column_letter(_col(second_field))
+    for first_field, second_field in active_merged:
+        c1 = get_column_letter(active_col_idx[first_field])
+        c2 = get_column_letter(active_col_idx[second_field])
         ws.merge_cells(f"{c1}1:{c2}1")
         _apply_header_style(ws[f"{c1}1"])
 
     # Data rows
     for row_idx, rec in enumerate(records, start=2):
         fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
-        for col_idx, (_, field_name, _) in enumerate(COLUMNS, start=1):
+        for col_idx, (_, field_name, _) in enumerate(active_cols, start=1):
             value = _get_value(rec, field_name)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
