@@ -41,21 +41,7 @@ if not exist "%FLAG%" (
     echo done > "%FLAG%"
 )
 
-echo.
-echo  ================================================
-echo   Data Extraction Bot  -  http://localhost:5000
-echo  ================================================
-echo   Zatvorete tozi prozorec za da spirete bota.
-echo.
-
-:: Kill any lingering process on port 5000 before starting
-powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
-timeout /t 2 /nobreak >nul
-
-:: Open browser in background: polls every 0.5s until server responds (max 20s)
-start /b "" "%PYTHON%" -c "exec('import urllib.request,time,webbrowser\nfor _ in range(40):\n  time.sleep(0.5)\n  try:\n    urllib.request.urlopen(\'http://127.0.0.1:5000/\',timeout=1)\n    webbrowser.open(\'http://localhost:5000\')\n    break\n  except: pass')"
-
-:: Start server in this window (foreground — log visible here)
-"%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 5000 --app-dir "%ROOT%"
+:: Start bot — finds free port automatically (5000-5010)
+"%PYTHON%" "%ROOT%\run_bot.py"
 
 pause
