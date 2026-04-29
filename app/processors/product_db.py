@@ -244,11 +244,13 @@ class RezawPlastDatabase:
 
         code_idx  = ProductDatabase._find_col(headers, ["код", "code", "артикул"]) or 0
         desc_idx  = ProductDatabase._find_col(headers, ["описание", "description", "naziv"]) or 1
-        price_idx = ProductDatabase._find_col(headers, ["ед_ цена", "ед.цена", "цена", "price"]) or 2
+        price_idx = ProductDatabase._find_col(headers, ["ед_ цена", "ед.цена", "цена", "price"])
+        if price_idx is None and len(df.columns) > 2:
+            price_idx = 2
 
         col_code  = df.columns[code_idx]
         col_desc  = df.columns[desc_idx]
-        col_price = df.columns[price_idx]
+        col_price = df.columns[price_idx] if price_idx is not None else None
 
         logger.info("Rezaw-Plast products — code:%s  desc:%s  price:%s",
                     col_code, col_desc, col_price)
@@ -267,7 +269,7 @@ class RezawPlastDatabase:
             info = ProductInfo(
                 internal_code = code,
                 description   = str(row[col_desc]).strip(),
-                unit_price    = str(row[col_price]).strip(),
+                unit_price    = str(row[col_price]).strip() if col_price is not None else "",
             )
             self._by_code[code.upper()] = info
 
