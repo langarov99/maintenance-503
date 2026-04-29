@@ -218,6 +218,7 @@
               <th colspan="2">Количество</th>
               <th colspan="2">Цена за брой</th>
               <th colspan="2">Обща сума</th>
+              <th>Нов продукт</th>
               <th>Име на продукта</th>
               <th>EAN / Баркод</th>
               <th>Кг (бруто/нето)</th>
@@ -373,6 +374,7 @@
         + `<td>${pCur}</td>`
         + `<td>${tVal}</td>`
         + `<td>${tCur}</td>`
+        + `<td>${rec.is_new_product ? 'Да' : 'Не'}</td>`
         + `<td>${rec.product_name || ''}</td>`
         + `<td>${rec.ean || ''}</td>`
         + `<td>${rec.weight_kg || ''}</td>`
