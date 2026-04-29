@@ -198,8 +198,6 @@ async def extract(
                     rec.product_name = info.description
                 if not rec.ean and (info.ean or info.main_barcode):
                     rec.ean = info.ean or info.main_barcode
-                if not rec.price and info.unit_price:
-                    rec.price = info.unit_price
                 enriched += 1
             if enriched:
                 logger.info("Enriched %d records from product DB", enriched)
@@ -220,8 +218,6 @@ async def extract(
                         rec.product_name = info.description
                     if not rec.ean and info.ean:
                         rec.ean = info.ean
-                    if not rec.price and info.unit_price:
-                        rec.price = info.unit_price
                     enriched_rp += 1
                 if enriched_rp:
                     logger.info("Rezaw-Plast: enriched %d records from DB", enriched_rp)
