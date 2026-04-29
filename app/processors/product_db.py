@@ -31,26 +31,38 @@ class ProductDatabase:
         self._loaded = False
 
     def load(self):
-        main_file = self.data_dir / "osram-export-all.xlsx"
-        ean_file  = self.data_dir / "osram-export-all-ean-code.xlsx"
+        def _find_file(exact: str, pattern: str) -> Optional[Path]:
+            p = self.data_dir / exact
+            if p.exists():
+                return p
+            matches = [f for f in sorted(self.data_dir.glob(pattern))
+                       if f.name == exact or not f.name.startswith('~$')]
+            if matches:
+                logger.info("OSRAM: '%s' not found, using '%s'", exact, matches[0].name)
+                return matches[0]
+            logger.info("OSRAM: no file matching '%s' in %s", pattern, self.data_dir)
+            return None
 
-        if main_file.exists():
+        main_file = _find_file("osram-products.xlsx", "osram*[!ean]*.xlsx")
+        ean_file  = _find_file("osram-export-all-ean-code.xlsx", "osram*ean*.xlsx")
+
+        if main_file:
             try:
                 self._load_main(main_file)
                 logger.info("Main product file loaded: %d records", len(self._by_internal_code))
             except Exception as e:
                 logger.error("Failed to load main product file: %s", e)
         else:
-            logger.info("Main product file not found, EAN-only mode: %s", main_file)
+            logger.info("Main product file not found, EAN-only mode")
 
-        if ean_file.exists():
+        if ean_file:
             try:
                 self._load_ean(ean_file)
                 logger.info("EAN file loaded: %d EAN entries", len(self._by_ean))
             except Exception as e:
                 logger.error("Failed to load EAN file: %s", e)
         else:
-            logger.warning("EAN file not found: %s", ean_file)
+            logger.warning("EAN file not found")
 
         self._loaded = True
         logger.info("Product DB ready: %d by code, %d by EAN",
@@ -115,6 +127,9 @@ class ProductDatabase:
         art_idx = self._find_col(headers, ["артикул", "арт.", "код", "article", "code", "item"]) or 0
         col_art = df.columns[art_idx]
 
+        desc_idx = self._find_col(headers, ["описание", "description", "desc", "naziv"])
+        col_desc = df.columns[desc_idx] if desc_idx is not None else None
+
         # EAN column: detect by header keyword, then by scanning values for
         # barcode-like content, then fall back to column C (index 2)
         ean_idx = self._find_col(headers, ["ean", "gtin", "баркод", "barcode"])
@@ -134,6 +149,7 @@ class ProductDatabase:
         for _, row in df.iterrows():
             art_code   = self._clean_val(str(row[col_art]))
             ean_number = self._clean_val(str(row[col_ean]))
+            desc_text  = str(row[col_desc]).strip() if col_desc is not None else ""
 
             if not ean_number or not re.match(r'^\d{8,14}$', ean_number):
                 continue
@@ -144,6 +160,7 @@ class ProductDatabase:
 
             self._by_ean[ean_number] = info or ProductInfo(
                 internal_code=art_code,
+                description=desc_text,
                 ean=ean_number,
             )
 
