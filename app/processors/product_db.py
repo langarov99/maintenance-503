@@ -207,12 +207,12 @@ class RezawPlastDatabase:
             return None
 
         products_file = _find_file(
-            "rezaw-plast-all-export-products.xlsx",
-            "rezaw-plast*product*.xlsx",
+            "rezawplast-products.xlsx",
+            "rezaw*plast*product*.xlsx",
         )
         ean_file = _find_file(
             "rezaw-plast-all-export-ean.xlsx",
-            "rezaw-plast*ean*.xlsx",
+            "rezaw*plast*ean*.xlsx",
         )
 
         if products_file:
