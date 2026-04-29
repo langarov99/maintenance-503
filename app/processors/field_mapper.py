@@ -555,7 +555,8 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
             header_idx = i
             break
     if header_idx is None:
-        logger.info("Rezaw-Plast: no header row found in table (%d rows)", len(table))
+        logger.info("Rezaw-Plast: no header row found in table (%d rows), first 3 rows: %s",
+                    len(table), [[str(c or "")[:30] for c in r] for r in table[:3]])
         return []
     logger.info("Rezaw-Plast: header row found at index %d", header_idx)
 
