@@ -187,7 +187,10 @@ async def extract(
                 am_code = getattr(rec, "_osram_article", None)
                 # 1. Try supplier article (AM code)
                 info = db.lookup(am_code)
-                # 2. Always also try EAN — prefer result that has an internal code
+                # 2. Try extracted product code when different from AM code
+                if not info and rec.product_code and rec.product_code != am_code:
+                    info = db.lookup(rec.product_code)
+                # 3. Always also try EAN — prefer result that has an internal code
                 if rec.ean:
                     ean_info = db.lookup(rec.ean)
                     if ean_info and ean_info.internal_code and (
