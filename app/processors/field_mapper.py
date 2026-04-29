@@ -1479,6 +1479,9 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             i += 3  # code_row + number_row + desc_row
 
     logger.info("M-Tech extraction: %d records", len(records))
+    if not records and text:
+        lines = text.splitlines()
+        logger.info("M-Tech text (first 30 lines): %s", lines[:30])
     return records
 
 
