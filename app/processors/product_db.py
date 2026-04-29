@@ -236,10 +236,17 @@ class RezawPlastDatabase:
         logger.info("Rezaw-Plast products — code:%s  desc:%s  price:%s",
                     col_code, col_desc, col_price)
 
+        sample_logged = False
         for _, row in df.iterrows():
             code = str(row[col_code]).strip()
             if not code or code.lower() in ("nan", ""):
                 continue
+            # Normalize numeric codes read as floats (e.g. "100112.0" → "100112")
+            if re.match(r'^\d+\.0$', code):
+                code = code[:-2]
+            if not sample_logged:
+                logger.info("Rezaw-Plast products sample code (raw→norm): %r", code)
+                sample_logged = True
             info = ProductInfo(
                 internal_code = code,
                 description   = str(row[col_desc]).strip(),
@@ -282,7 +289,10 @@ class RezawPlastDatabase:
     def lookup(self, code: str) -> Optional[ProductInfo]:
         if not code or not self._loaded:
             return None
-        key     = code.strip().upper()
+        key = code.strip().upper()
+        # Normalize numeric codes that may arrive as "100112.0"
+        if re.match(r'^\d+\.0$', key):
+            key = key[:-2]
         ean_key = ProductDatabase._clean_val(code.strip())
         return self._by_code.get(key) or self._by_ean.get(ean_key)
 
