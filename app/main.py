@@ -191,6 +191,7 @@ async def extract(
                     info = db.lookup(rec.ean)
                 if not info:
                     continue
+                rec.is_new_product = False
                 # Product code from DB overrides extracted text for OSRAM records
                 if info.internal_code and rec.extraction_method == "osram":
                     rec.product_code = info.internal_code
