@@ -195,26 +195,39 @@ class RezawPlastDatabase:
         self._loaded = False
 
     def load(self):
-        products_file = self.data_dir / "rezaw-plast-all-export-products.xlsx"
-        ean_file      = self.data_dir / "rezaw-plast-all-export-ean.xlsx"
+        def _find_file(exact: str, pattern: str) -> Optional[Path]:
+            p = self.data_dir / exact
+            if p.exists():
+                return p
+            matches = sorted(self.data_dir.glob(pattern))
+            if matches:
+                logger.info("Rezaw-Plast: '%s' not found, using '%s'", exact, matches[0].name)
+                return matches[0]
+            logger.info("Rezaw-Plast: no file matching '%s' in %s", pattern, self.data_dir)
+            return None
 
-        if products_file.exists():
+        products_file = _find_file(
+            "rezaw-plast-all-export-products.xlsx",
+            "rezaw-plast*product*.xlsx",
+        )
+        ean_file = _find_file(
+            "rezaw-plast-all-export-ean.xlsx",
+            "rezaw-plast*ean*.xlsx",
+        )
+
+        if products_file:
             try:
                 self._load_products(products_file)
                 logger.info("Rezaw-Plast products loaded: %d records", len(self._by_code))
             except Exception as e:
                 logger.error("Failed to load Rezaw-Plast products: %s", e)
-        else:
-            logger.info("Rezaw-Plast products file not found: %s", products_file)
 
-        if ean_file.exists():
+        if ean_file:
             try:
                 self._load_ean(ean_file)
                 logger.info("Rezaw-Plast EAN loaded: %d entries", len(self._by_ean))
             except Exception as e:
                 logger.error("Failed to load Rezaw-Plast EAN: %s", e)
-        else:
-            logger.info("Rezaw-Plast EAN file not found: %s", ean_file)
 
         self._loaded = True
         logger.info("Rezaw-Plast DB ready: %d by code, %d by EAN",
