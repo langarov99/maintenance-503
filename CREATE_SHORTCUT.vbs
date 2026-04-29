@@ -11,7 +11,7 @@ Set oShortcut = oShell.CreateShortcut(sDesktop & "\Data Extraction Bot.lnk")
 oShortcut.TargetPath       = "wscript.exe"
 oShortcut.Arguments        = """" & sRoot & "\LAUNCH.vbs"""
 oShortcut.WorkingDirectory = sRoot
-oShortcut.IconLocation     = "shell32.dll,14"
+oShortcut.IconLocation     = sRoot & "\icon-bot.ico"
 oShortcut.Description      = "Data Extraction Bot"
 oShortcut.Save
 
