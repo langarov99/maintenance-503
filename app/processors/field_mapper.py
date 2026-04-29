@@ -4932,6 +4932,10 @@ def _parse_heko_table(table: list[list]) -> list[ProductRecord]:
     if not table:
         return []
 
+    # Diagnostic: log first 3 rows to understand structure
+    for i, row in enumerate(table[:3]):
+        logger.info("Heko table row[%d]: %s", i, [str(c or "")[:40] for c in row])
+
     records = []
     for row in table:
         if len(row) < 5:
@@ -4941,6 +4945,9 @@ def _parse_heko_table(table: list[list]) -> list[ProductRecord]:
             return re.sub(r'\s+', ' ', str(row[i] or "")).strip() if i < len(row) else ""
 
         code_raw = cell(1)
+        # Excel may read numeric codes as floats: 10109.0 → 10109
+        if re.match(r'^\d+\.0$', code_raw):
+            code_raw = code_raw[:-2]
         # Skip header / empty rows — code must be numeric
         if not re.match(r'^\d+$', code_raw):
             continue
