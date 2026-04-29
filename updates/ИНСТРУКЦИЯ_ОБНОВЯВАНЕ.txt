@@ -14,19 +14,19 @@
 
 След това генерирайте patch файл с командата:
 
-  git format-patch HEAD~1 --stdout > update.patch
+  git format-patch HEAD~1 --stdout > updates\update.patch
 
   (Ако промените са повече от 1 commit, сменете ~1 с броя commits,
-   например за 3 промени: git format-patch HEAD~3 --stdout > update.patch)
+   например за 3 промени: git format-patch HEAD~3 --stdout > updates\update.patch)
 
-Файлът update.patch ще се създаде в папката на бота.
+Файлът update.patch ще се създаде в папката updates\.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   СТЪПКА 2 — ИЗПРАЩАНЕ НА PATCH ФАЙЛА
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Изпратете файла update.patch на другите машини чрез:
+Изпратете файла updates\update.patch на другите машини чрез:
   - Имейл
   - USB стик
   - Viber / WhatsApp
@@ -39,10 +39,9 @@
 
 1. Уверете се, че ботът НЕ работи (затворете START.bat ако е пуснат)
 
-2. Поставете update.patch директно в папката на бота
-   (до START.bat, APPLY_UPDATE.bat и другите файлове)
+2. Поставете update.patch в папката updates\ на бота
 
-3. Щракнете двукратно върху APPLY_UPDATE.bat
+3. Щракнете двукратно върху updates\APPLY_UPDATE.bat
 
 4. Изчакайте съобщението "[OK] Обновлението е приложено успешно!"
 
