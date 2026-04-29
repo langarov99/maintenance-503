@@ -195,9 +195,13 @@ class RezawPlastDatabase:
         self._loaded = False
 
     def load(self):
+        all_xlsx = sorted(f.name for f in self.data_dir.glob("*.xlsx"))
+        logger.info("Rezaw-Plast: data_dir=%s  xlsx files=%s", self.data_dir, all_xlsx)
+
         def _find_file(exact: str, pattern: str) -> Optional[Path]:
             p = self.data_dir / exact
             if p.exists():
+                logger.info("Rezaw-Plast: found exact file '%s'", exact)
                 return p
             matches = sorted(self.data_dir.glob(pattern))
             if matches:
