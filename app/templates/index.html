@@ -269,7 +269,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'automania', 'avisa', 'car_passion', 'farad', 'frogum', 'gelly_plast', 'geter_hosaja', 'gumarny_zubri', 'hakr', 'kegel_blazusiak', 'maxton_design', 'mtech', 'osram', 'petex', 'rezaw_plast', 'rigum', 'tompar', 'vinove']);
+  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'automania', 'avisa', 'car_passion', 'farad', 'frogum', 'gelly_plast', 'geter_hosaja', 'gumarny_zubri', 'hakr', 'kegel_blazusiak', 'mafra', 'maxton_design', 'mtech', 'osram', 'petex', 'rezaw_plast', 'rigum', 'tompar', 'vinove']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {
