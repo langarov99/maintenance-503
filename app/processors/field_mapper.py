@@ -1371,8 +1371,9 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
                 header_idx = i
                 break
         if header_idx is None:
-            logger.warning("M-Tech: no header row found in table (%d rows), first 3 rows: %s",
-                           len(table), [[str(c or "")[:40] for c in r] for r in table[:3]])
+            logger.warning("M-Tech: no header row found in table (%d rows)", len(table))
+            for ri, rw in enumerate(table[:4]):
+                logger.warning("M-Tech:   row[%d]: %s", ri, [str(c or "")[:30] for c in rw])
             continue
 
         headers = [norm(c) for c in table[header_idx]]
