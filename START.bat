@@ -51,6 +51,11 @@ echo.
 :: Open browser in background: polls every 0.5s until server responds (max 20s)
 start /b "" "%PYTHON%" -c "exec('import urllib.request,time,webbrowser\nfor _ in range(40):\n  time.sleep(0.5)\n  try:\n    urllib.request.urlopen(\'http://127.0.0.1:5000/\',timeout=1)\n    webbrowser.open(\'http://localhost:5000\')\n    break\n  except: pass')"
 
+:: Kill any lingering process on port 5000 before starting
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":5000 "') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+
 :: Start server in this window (foreground — log visible here)
 "%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 5000 --app-dir "%ROOT%"
 

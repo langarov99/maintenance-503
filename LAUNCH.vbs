@@ -33,6 +33,23 @@ If sPython = "" Then
     WScript.Quit 1
 End If
 
+' ── Check if server is already running on port 5000 ─────────────────────────
+Dim oHTTP
+Set oHTTP = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+On Error Resume Next
+oHTTP.Open "GET", "http://127.0.0.1:5000/", False
+oHTTP.setTimeouts 1500, 1500, 1500, 1500
+oHTTP.Send
+If Err.Number = 0 And oHTTP.Status = 200 Then
+    ' Already running — just open browser
+    oShell.Run "http://localhost:5000"
+    WScript.Quit 0
+End If
+On Error GoTo 0
+
+' ── Kill any lingering process on port 5000 ───────────────────────────────────
+oShell.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon 2^>nul ^| findstr "":5000 ""') do taskkill /F /PID %a 2>nul", 0, True
+
 ' ── Start uvicorn hidden (window style 0 = no CMD window) ────────────────────
 sCmd = """" & sPython & """ -m uvicorn app.main:app " & _
        "--host 127.0.0.1 --port 5000 " & _
