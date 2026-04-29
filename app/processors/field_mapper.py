@@ -1549,20 +1549,13 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
         raw_code = cell(code_idx)
         if not raw_code:
             continue
-        # Apply OCR correction to the code cell value
-        code = _fix_mafra_code(raw_code)
-        if not _MAFRA_CODE_RE.match(code):
-            # Try stripping non-alnum noise (Pass 4 equivalent for table cells)
-            cleaned = re.sub(r'[^A-Za-z0-9АаВвСсЕеНнКкМмОоРрТтХхФф#]', '', raw_code)
-            if cleaned:
-                code = _fix_mafra_code(cleaned)
-            if not _MAFRA_CODE_RE.match(code):
-                # Purely numeric code (e.g. 0466, 0473) — keep as-is
-                digits = re.sub(r'\D', '', raw_code)
-                if re.match(r'^\d{3,5}$', digits):
-                    code = digits
-                if not _MAFRA_CODE_RE.match(code) and not re.match(r'^\d{3,5}$', code):
-                    continue
+        # Normalize: strip newlines (code may wrap across lines in narrow column)
+        # and apply OCR corrections for scanned variants
+        code = _fix_mafra_code(raw_code.replace('\n', '').replace('\r', '').strip())
+        # Accept: standard short codes (A0310), numeric (0466), or any longer
+        # alphanumeric code (AVMFGLOVEBLUE09) — table column already identifies it.
+        if not re.match(r'^[A-Z0-9]{3,}$', code):
+            continue
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
