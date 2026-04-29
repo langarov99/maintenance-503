@@ -1549,11 +1549,11 @@ def _parse_mafra_table(table: list[list]) -> list[ProductRecord]:
         raw_code = cell(code_idx)
         if not raw_code:
             continue
-        # Normalize: strip newlines (code may wrap across lines in narrow column)
-        # and apply OCR corrections for scanned variants
-        code = _fix_mafra_code(raw_code.replace('\n', '').replace('\r', '').strip())
-        # Accept: standard short codes (A0310), numeric (0466), or any longer
-        # alphanumeric code (AVMFGLOVEBLUE09) — table column already identifies it.
+        # Normalize: strip newlines (code may wrap across lines in narrow column).
+        # Do NOT apply _fix_mafra_code here — OCR digit-substitutions (V→0, G→6, B→8)
+        # destroy valid letter codes like AVMFGLOVEGREEN08 in text-based PDFs.
+        code = raw_code.replace('\n', '').replace('\r', '').strip().upper()
+        # Accept any alphanumeric code ≥ 3 chars (table column already identifies it).
         if not re.match(r'^[A-Z0-9]{3,}$', code):
             continue
 
