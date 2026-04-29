@@ -599,7 +599,7 @@ def get_rigum_db(data_dir: str) -> SupplierNameDatabase:
     if _rigum_db is None:
         # Prefer "Описание eShop" (detailed) over a short "Описание" column
         _rigum_db = SupplierNameDatabase(
-            data_dir, "products-rigum.xlsx",
+            data_dir, "rigum-products.xlsx",
             desc_keywords=["eshop", "описание", "description", "name"],
         )
         _rigum_db.load()
