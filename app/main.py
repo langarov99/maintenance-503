@@ -215,6 +215,7 @@ async def extract(
                         info = rp_db.lookup(rec.ean)
                     if not info:
                         continue
+                    rec.is_new_product = False
                     if not rec.product_name and info.description:
                         rec.product_name = info.description
                     if not rec.ean and info.ean:
