@@ -643,3 +643,14 @@ def get_tompar_db(data_dir: str) -> SupplierNameDatabase:
         _tompar_db = SupplierNameDatabase(data_dir, "tompar-products.xlsx")
         _tompar_db.load()
     return _tompar_db
+
+
+_senax_db: Optional[SupplierNameDatabase] = None
+
+
+def get_senax_db(data_dir: str) -> SupplierNameDatabase:
+    global _senax_db
+    if _senax_db is None:
+        _senax_db = SupplierNameDatabase(data_dir, "sonax-products.xlsx")
+        _senax_db.load()
+    return _senax_db

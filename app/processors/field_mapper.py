@@ -4744,6 +4744,144 @@ def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Sonax / Сенакс ООД
+# ---------------------------------------------------------------------------
+
+# 8-digit Sonax article code: e.g. 01744000
+_SENAX_CODE_RE = re.compile(r'\b(\d{8})\b')
+
+
+def _is_senax_document(text: str) -> bool:
+    return bool(re.search(r'сенакс|senax|СЕНАКС|BG831566723', text, re.IGNORECASE))
+
+
+def _senax_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Senax/Sonax invoice.
+
+    Expected columns: No. | Наименование (code + dash + name) | Кол. | Мярка | Ед. цена | Стойност
+    The description cell contains: '01744000 - Xtreme бързо керамично покритие стъкла 2в1, 750ml'
+    """
+    if not table or len(table) < 2:
+        return []
+
+    records = []
+    for row in table:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        # Find cell containing 8-digit code
+        desc_text = ""
+        desc_idx = -1
+        for i, c in enumerate(row):
+            s = str(c or "")
+            if _SENAX_CODE_RE.search(s):
+                desc_text = s
+                desc_idx = i
+                break
+        if not desc_text:
+            continue
+
+        m = _SENAX_CODE_RE.search(desc_text)
+        if not m:
+            continue
+
+        code = m.group(1)
+        # Name follows the code, separated by " - "
+        after_code = desc_text[m.end():].strip()
+        name = re.sub(r'^[\s\-–—]+', '', after_code).strip() or None
+        # Clean up multiline whitespace
+        if name:
+            name = re.sub(r'\s+', ' ', name)[:150]
+
+        def cell(idx):
+            if idx < 0 or idx >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+
+        # Determine column positions relative to desc_idx
+        # Layout: [0]=No, [desc_idx]=Наименование, [desc_idx+1]=Qty, [desc_idx+2]=Мярка, [desc_idx+3]=Ед.цена, [desc_idx+4]=Стойност
+        qty       = cell(desc_idx + 1) or None
+        price_str = _senax_num(cell(desc_idx + 3))
+        total_str = _senax_num(cell(desc_idx + 4))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + " лв."
+        if total_str:
+            rec.total_price = total_str + " лв."
+
+        records.append(rec)
+        logger.info("Senax table: code=%s name=%r qty=%s total=%s", code, name, qty, total_str)
+
+    return records
+
+
+def _parse_senax_from_text(text: str) -> list[ProductRecord]:
+    """Text fallback — parses lines like '1 01744000 - Xtreme бързо ... 6 бр 6.80 40.78'."""
+    records: list[ProductRecord] = []
+    seen: set[str] = set()
+
+    # Pattern: optional leading number, 8-digit code, dash, name, qty, unit, price, total
+    line_re = re.compile(
+        r'(?:^\d+\s+)?(\d{8})\s*[-–—]\s*(.+?)\s+'
+        r'(\d+(?:[,\.]\d+)?)\s+(?:бр\.?|pcs\.?|szt\.?|set|kpl\.?)\s+'
+        r'([\d\s,\.]+?)\s+([\d\s,\.]+?)\s*$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    for m in line_re.finditer(text):
+        code = m.group(1)
+        if code in seen:
+            continue
+        seen.add(code)
+        name = re.sub(r'\s+', ' ', m.group(2)).strip()[:150] or None
+        qty  = m.group(3).strip() or None
+        price_str = _senax_num(m.group(4))
+        total_str = _senax_num(m.group(5))
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if price_str:
+            rec.price = price_str + " лв."
+        if total_str:
+            rec.total_price = total_str + " лв."
+        records.append(rec)
+        logger.info("Senax text: code=%s name=%r qty=%s", code, name, qty)
+
+    return records
+
+
+def extract_senax_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Senax: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_senax_table(table))
+    if records:
+        logger.info("Senax: %d records from tables", len(records))
+        return records
+
+    if text:
+        records = _parse_senax_from_text(text)
+        logger.info("Senax text extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Auto-switch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -4930,6 +5068,14 @@ class FieldMapper:
             records = extract_tompar_products(tables, text)
             if records:
                 logger.info("Extraction method: ToM-PaR (%d records)", len(records))
+                return records
+
+        # Step 0u — Sonax / Сенакс ООД (explicit selection or auto-detection)
+        if supplier == "sonax" or (supplier == "auto" and _is_senax_document(text)):
+            _specific_tried = True
+            records = extract_senax_products(tables, text)
+            if records:
+                logger.info("Extraction method: Sonax (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
