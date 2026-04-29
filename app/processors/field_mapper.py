@@ -1321,6 +1321,59 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
 # M-Tech Poland-specific extractor
 # ---------------------------------------------------------------------------
 
+_MTECH_CODE_RE = re.compile(
+    r'^([A-Z][A-Z0-9\-/]{1,20})\s+'   # product code
+    r'\d{6,10}\s+'                      # CN code
+    r'[A-Z]{2}\s+'                      # country of origin
+    r'(\d{8,14})\s+'                    # EAN
+    r'([\d,]+)\s*$',                    # weight
+    re.IGNORECASE,
+)
+_MTECH_DESC_RE = re.compile(
+    r'^(.+?)\s+'
+    r'(\d+(?:[,.]\d+)?)\s+'
+    r'(szt\.?|kpl\.?|pcs\.?|set|pce)\s+'
+    r'\d+\s*%\s+'
+    r'([\d,]+)\s+'
+    r'([\d,]+)\s+EUR\s*$',
+    re.IGNORECASE,
+)
+
+
+def _parse_mtech_from_text(text: str) -> list[ProductRecord]:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    records = []
+    i = 0
+    while i < len(lines):
+        m_code = _MTECH_CODE_RE.match(lines[i])
+        if m_code and i + 2 < len(lines):
+            code   = m_code.group(1).upper()
+            ean    = m_code.group(2)
+            weight = m_code.group(3).replace(',', '.')
+            # lines[i+1] = sequential number (skip); lines[i+2] = description
+            m_desc = _MTECH_DESC_RE.match(lines[i + 2])
+            if m_desc:
+                rec = ProductRecord(extraction_method="regex")
+                rec.product_code  = code
+                rec.ean           = ean
+                rec.weight_kg     = weight
+                rec.product_name  = m_desc.group(1).strip()
+                qty_num = m_desc.group(2).replace(',', '.')
+                unit    = m_desc.group(3)
+                try:
+                    q = float(qty_num)
+                    rec.quantity = f"{int(q) if q == int(q) else q} {unit}"
+                except ValueError:
+                    rec.quantity = f"{qty_num} {unit}"
+                rec.price       = m_desc.group(4).replace(',', '.') + " EUR"
+                rec.total_price = m_desc.group(5).replace(',', '.') + " EUR"
+                records.append(rec)
+                i += 3
+                continue
+        i += 1
+    return records
+
+
 def _clean_num(raw: str) -> str:
     """Strip non-numeric chars, round to max 3 decimal places, ensure 2 minimum."""
     p = re.sub(r'[^\d.,]', '', str(raw)).replace(',', '.')
@@ -1478,10 +1531,12 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             records.append(rec)
             i += 3  # code_row + number_row + desc_row
 
-    logger.info("M-Tech extraction: %d records", len(records))
     if not records and text:
-        lines = text.splitlines()
-        logger.info("M-Tech text (first 30 lines): %s", lines[:30])
+        logger.info("M-Tech: table extraction failed, trying text parser")
+        records = _parse_mtech_from_text(text)
+        if records:
+            logger.info("M-Tech text parser: %d records", len(records))
+    logger.info("M-Tech extraction: %d records", len(records))
     return records
 
 
