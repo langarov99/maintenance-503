@@ -190,6 +190,10 @@ async def extract(
                 if not info and rec.ean:
                     info = db.lookup(rec.ean)
                 if not info:
+                    logger.info("OSRAM unmatched: code=%r  am=%r  ean=%r",
+                                rec.product_code,
+                                getattr(rec, "_osram_article", None),
+                                rec.ean)
                     continue
                 rec.is_new_product = False
                 # Product code from DB overrides extracted text for OSRAM records
