@@ -184,19 +184,22 @@ async def extract(
         if supplier in ("auto", "osram") and db.is_loaded:
             enriched = 0
             for rec in records:
-                # 1. Try supplier article (AM code) — most specific
-                info = db.lookup(getattr(rec, "_osram_article", None))
-                # 2. Fallback: lookup by EAN extracted from the document
-                if not info and rec.ean:
-                    info = db.lookup(rec.ean)
+                am_code = getattr(rec, "_osram_article", None)
+                # 1. Try supplier article (AM code)
+                info = db.lookup(am_code)
+                # 2. Always also try EAN — prefer result that has an internal code
+                if rec.ean:
+                    ean_info = db.lookup(rec.ean)
+                    if ean_info and ean_info.internal_code and (
+                        not info or not info.internal_code
+                    ):
+                        info = ean_info
                 if not info:
                     logger.info("OSRAM unmatched: code=%r  am=%r  ean=%r",
-                                rec.product_code,
-                                getattr(rec, "_osram_article", None),
-                                rec.ean)
+                                rec.product_code, am_code, rec.ean)
                     continue
                 rec.is_new_product = False
-                # Product code from DB overrides extracted text for OSRAM records
+                # Always use catalog internal code — overrides AM fallback code
                 if info.internal_code and rec.extraction_method == "osram":
                     rec.product_code = info.internal_code
                 if not rec.product_name and info.description:
