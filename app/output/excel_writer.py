@@ -9,12 +9,12 @@ from ..processors.field_mapper import ProductRecord
 
 COLUMNS = [
     ("Код на продукта",         "product_code",   20),
-    ("КОЛИЧЕСТВО",              "quantity_num",    12),  # merged with quantity_unit
-    ("",                        "quantity_unit",   10),
-    ("ЦЕНА ЗА БРОЙ",            "price_val",       14),  # merged with price_cur
-    ("",                        "price_cur",        8),
-    ("ОБЩА СУМА",               "total_val",       14),  # merged with total_cur
-    ("",                        "total_cur",        8),
+    ("Количество",              "quantity_num",    12),
+    ("М.ед.",                   "quantity_unit",   10),
+    ("Цена за брой",            "price_val",       14),
+    ("Валута",                  "price_cur",        8),
+    ("Обща сума",               "total_val",       14),
+    ("Валута ",                 "total_cur",        8),
     ("Нов продукт",             "is_new_product",  14),
     ("Име на продукта",         "product_name",    40),
     ("EAN / Баркод",            "ean",             18),
@@ -22,16 +22,6 @@ COLUMNS = [
     ("Брой/части в комплект",   "parts_in_set",    20),
     ("Цвят",                    "color",           16),
 ]
-
-# Pairs of (first_col, second_col) — 1-based — that get merged in the header row
-_MERGED_PAIRS = [
-    ("quantity_num",  "quantity_unit"),
-    ("price_val",     "price_cur"),
-    ("total_val",     "total_cur"),
-]
-
-def _col(field_name: str) -> int:
-    return next(i + 1 for i, (_, f, _) in enumerate(COLUMNS) if f == field_name)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
 HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
@@ -52,12 +42,12 @@ def _split(raw: str):
 
 
 def _get_value(rec: ProductRecord, field_name: str) -> str:
-    if field_name == "quantity_num":  return _split(rec.quantity   or "")[0]
-    if field_name == "quantity_unit": return _split(rec.quantity   or "")[1]
-    if field_name == "price_val":     return _split(rec.price      or "")[0]
-    if field_name == "price_cur":     return _split(rec.price      or "")[1]
-    if field_name == "total_val":     return _split(rec.total_price or "")[0]
-    if field_name == "total_cur":     return _split(rec.total_price or "")[1]
+    if field_name == "quantity_num":   return _split(rec.quantity    or "")[0]
+    if field_name == "quantity_unit":  return _split(rec.quantity    or "")[1]
+    if field_name == "price_val":      return _split(rec.price       or "")[0]
+    if field_name == "price_cur":      return _split(rec.price       or "")[1]
+    if field_name == "total_val":      return _split(rec.total_price or "")[0]
+    if field_name == "total_cur":      return _split(rec.total_price or "")[1]
     if field_name == "is_new_product": return "Да" if rec.is_new_product else "Не"
     return getattr(rec, field_name, None) or ""
 
@@ -74,10 +64,6 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
     # Filter active columns
     active_cols = [(h, f, w) for h, f, w in COLUMNS
                    if include_fields is None or f in include_fields]
-    active_fields = {f for _, f, _ in active_cols}
-    active_merged = [(f1, f2) for f1, f2 in _MERGED_PAIRS
-                     if f1 in active_fields and f2 in active_fields]
-    active_col_idx = {f: i + 1 for i, (_, f, _) in enumerate(active_cols)}
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -90,13 +76,6 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     ws.row_dimensions[1].height = 30
-
-    # Merge paired header columns
-    for first_field, second_field in active_merged:
-        c1 = get_column_letter(active_col_idx[first_field])
-        c2 = get_column_letter(active_col_idx[second_field])
-        ws.merge_cells(f"{c1}1:{c2}1")
-        _apply_header_style(ws[f"{c1}1"])
 
     # Data rows
     for row_idx, rec in enumerate(records, start=2):

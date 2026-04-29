@@ -237,9 +237,12 @@
               <p>Изберете колони за експорт:</p>
               <div class="col-checks">
                 <label><input type="checkbox" value="product_code"> Код на продукта</label>
-                <label><input type="checkbox" value="quantity"> Количество</label>
-                <label><input type="checkbox" value="price"> Цена за брой</label>
-                <label><input type="checkbox" value="total_price"> Обща сума</label>
+                <label><input type="checkbox" value="quantity_num"> Количество</label>
+                <label><input type="checkbox" value="quantity_unit"> М.ед.</label>
+                <label><input type="checkbox" value="price_val"> Цена за брой</label>
+                <label><input type="checkbox" value="price_cur"> Валута (цена)</label>
+                <label><input type="checkbox" value="total_val"> Обща сума</label>
+                <label><input type="checkbox" value="total_cur"> Валута (сума)</label>
                 <label><input type="checkbox" value="is_new_product"> Нов продукт</label>
                 <label><input type="checkbox" value="product_name"> Име на продукта</label>
                 <label><input type="checkbox" value="ean"> EAN / Баркод</label>
@@ -258,9 +261,12 @@
             <tr>
               <th>#</th>
               <th>Код на продукта</th>
-              <th colspan="2">Количество</th>
-              <th colspan="2">Цена за брой</th>
-              <th colspan="2">Обща сума</th>
+              <th>Количество</th>
+              <th>М.ед.</th>
+              <th>Цена за брой</th>
+              <th>Валута</th>
+              <th>Обща сума</th>
+              <th>Валута</th>
               <th>Нов продукт</th>
               <th>Име на продукта</th>
               <th>EAN / Баркод</th>
@@ -460,9 +466,12 @@
   // Column group → actual field names
   const FIELD_MAP = {
     'product_code':  ['product_code'],
-    'quantity':      ['quantity_num', 'quantity_unit'],
-    'price':         ['price_val', 'price_cur'],
-    'total_price':   ['total_val', 'total_cur'],
+    'quantity_num':  ['quantity_num'],
+    'quantity_unit': ['quantity_unit'],
+    'price_val':     ['price_val'],
+    'price_cur':     ['price_cur'],
+    'total_val':     ['total_val'],
+    'total_cur':     ['total_cur'],
     'is_new_product':['is_new_product'],
     'product_name':  ['product_name'],
     'ean':           ['ean'],
