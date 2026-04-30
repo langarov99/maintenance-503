@@ -78,6 +78,13 @@
       color: #333; transition: all .15s; user-select: none;
     }
     .lang-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .flag-badge {
+      display: inline-block; padding: 1px 5px; border-radius: 3px;
+      font-size: 10px; font-weight: 700; letter-spacing: .5px;
+      background: #555; color: #fff; vertical-align: middle;
+      margin-right: 5px; font-family: monospace;
+    }
+    .lang-btn.active .flag-badge { background: #fff; color: #1a1a1a; }
 
     /* Submit */
     #submitBtn {
@@ -225,12 +232,12 @@
 
       <h2 style="margin-top:24px">3. Език(ци) на документа</h2>
       <div class="lang-grid" id="langGrid">
-        <div class="lang-btn active" data-lang="bg">&#127463;&#127468; Български</div>
-        <div class="lang-btn active" data-lang="en">&#127468;&#127463; Английски</div>
-        <div class="lang-btn" data-lang="pl">&#127477;&#127473; Полски</div>
-        <div class="lang-btn" data-lang="cs">&#127464;&#127487; Чешки</div>
-        <div class="lang-btn" data-lang="it">&#127470;&#127481; Италиански</div>
-        <div class="lang-btn" data-lang="de">&#127465;&#127466; Немски</div>
+        <div class="lang-btn active" data-lang="bg"><span class="flag-badge">BG</span> Български</div>
+        <div class="lang-btn active" data-lang="en"><span class="flag-badge">EN</span> Английски</div>
+        <div class="lang-btn" data-lang="pl"><span class="flag-badge">PL</span> Полски</div>
+        <div class="lang-btn" data-lang="cs"><span class="flag-badge">CZ</span> Чешки</div>
+        <div class="lang-btn" data-lang="it"><span class="flag-badge">IT</span> Италиански</div>
+        <div class="lang-btn" data-lang="de"><span class="flag-badge">DE</span> Немски</div>
       </div>
 
       <button id="submitBtn" disabled>&#9889; Извличане на данни</button>
