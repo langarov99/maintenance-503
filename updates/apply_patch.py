@@ -145,7 +145,7 @@ def _apply_file_diff(block, root_dir):
     if parent:
         os.makedirs(parent, exist_ok=True)
 
-    with open(abs_path, "w", encoding="utf-8", newline="\n") as f:
+    with open(abs_path, "w", encoding="utf-8", newline=None) as f:
         f.writelines(result_lines)
 
     action = "нов" if is_new_file else "обновен"
