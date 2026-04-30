@@ -5030,6 +5030,7 @@ def _parse_bmw_table(table: list[list]) -> list[ProductRecord]:
         unit_idx  = find(["мярка", "мярк"])
         qty_idx   = find(["кол"])
         price_idx = find(["ед.цена", "ед цена", "unit price", "цена"])
+        disc_idx  = find(["отст", "discount", "отстъпка", "rabat"])
         eur_idx   = find(["ст-ст eur", "eur"])
         bgn_idx   = find(["ст-ст bgn", "bgn"])
         data_start = header_idx + 1
@@ -5040,8 +5041,9 @@ def _parse_bmw_table(table: list[list]) -> list[ProductRecord]:
         unit_idx  = 2
         qty_idx   = 3
         price_idx = 4
-        eur_idx   = 6
-        bgn_idx   = 5
+        disc_idx  = 5
+        eur_idx   = 7
+        bgn_idx   = 6
         data_start = 0
 
     records = []
@@ -5071,8 +5073,19 @@ def _parse_bmw_table(table: list[list]) -> list[ProductRecord]:
             raw = cell(ci).replace(',', '.').replace('\xa0', '').replace(' ', '')
             return raw if raw and re.match(r'^\d+(?:\.\d+)?$', raw) else None
 
-        price_val = _num(price_idx) if price_idx is not None else None
-        price     = f"{price_val} EUR" if price_val else None
+        # Calculate net unit price after discount
+        gross_val = _num(price_idx) if price_idx is not None else None
+        disc_val  = _num(disc_idx)  if disc_idx  is not None else None
+        if gross_val and disc_val:
+            try:
+                net = round(float(gross_val) * (1 - float(disc_val) / 100), 2)
+                price = f"{net} EUR"
+            except (ValueError, ZeroDivisionError):
+                price = f"{gross_val} EUR"
+        elif gross_val:
+            price = f"{gross_val} EUR"
+        else:
+            price = None
 
         total_val = _num(eur_idx) if eur_idx is not None else None
         if total_val is None:
