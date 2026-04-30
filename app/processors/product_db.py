@@ -665,3 +665,90 @@ def get_heko_db(data_dir: str) -> SupplierNameDatabase:
         _heko_db = SupplierNameDatabase(data_dir, "heko-products.xlsx")
         _heko_db.load()
     return _heko_db
+
+
+# ---------------------------------------------------------------------------
+# Supplier code mapping  (supplier invoice code → our internal code)
+# File format: Excel with two columns:
+#   Column A — "Наш код"       (internal code, e.g. "1-HA1/E")
+#   Column B — "Код доставчик" (code as it appears on the invoice)
+# Column headers are auto-detected by keyword.
+# ---------------------------------------------------------------------------
+
+class SupplierCodeMapping:
+    """Translates a supplier's invoice code to our internal product code."""
+
+    def __init__(self, data_dir: str, filename: str):
+        self.data_dir = Path(data_dir)
+        self.filename = filename
+        self._map: dict[str, str] = {}   # supplier_code.upper() → internal_code
+        self._loaded = False
+
+    def load(self):
+        path = self.data_dir / self.filename
+        if not path.exists():
+            logger.info("Code mapping not found (optional): %s", path)
+            self._loaded = True
+            return
+        try:
+            df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+            df = df.fillna("")
+            headers = [str(c).lower().strip() for c in df.columns]
+
+            our_idx = ProductDatabase._find_col(
+                headers, ["наш", "internal", "наш код", "our", "код", "code"]
+            ) or 0
+            sup_idx = ProductDatabase._find_col(
+                headers, ["доставчик", "supplier", "farad", "производител",
+                          "артикул", "article", "invoice"]
+            )
+            if sup_idx is None:
+                sup_idx = 1 if our_idx == 0 else 0
+
+            col_our = df.columns[our_idx]
+            col_sup = df.columns[sup_idx]
+            logger.info("%s — our_code col:%s  supplier_code col:%s",
+                        self.filename, col_our, col_sup)
+
+            for _, row in df.iterrows():
+                our_code = str(row[col_our]).strip()
+                sup_code = str(row[col_sup]).strip()
+                if not our_code or not sup_code:
+                    continue
+                if our_code.lower() in ("nan", "") or sup_code.lower() in ("nan", ""):
+                    continue
+                key = sup_code.upper()
+                self._map[key] = our_code
+                # Also index without "1-" prefix so both forms match
+                if key.startswith("1-"):
+                    self._map[key[2:]] = our_code
+
+            logger.info("%s loaded: %d code mappings", self.filename, len(self._map))
+        except Exception as e:
+            logger.error("Failed to load code mapping %s: %s", self.filename, e)
+        self._loaded = True
+
+    def translate(self, supplier_code: str) -> Optional[str]:
+        """Return internal code for the given supplier code, or None if not found."""
+        if not supplier_code or not self._loaded:
+            return None
+        key = supplier_code.strip().upper()
+        result = self._map.get(key)
+        if result is None and key.startswith("1-"):
+            result = self._map.get(key[2:])
+        return result
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded and bool(self._map)
+
+
+_farad_code_map: Optional[SupplierCodeMapping] = None
+
+
+def get_farad_code_map(data_dir: str) -> SupplierCodeMapping:
+    global _farad_code_map
+    if _farad_code_map is None:
+        _farad_code_map = SupplierCodeMapping(data_dir, "farad-code-map.xlsx")
+        _farad_code_map.load()
+    return _farad_code_map
