@@ -1,69 +1,84 @@
 @echo off
-title Data Extraction Bot - Обновяване
+title Data Extraction Bot - Прилагане на обновление
 chcp 65001 > nul
 
-:: Тази папка (updates\)
 set "UPDATES_DIR=%~dp0"
 set "UPDATES_DIR=%UPDATES_DIR:~0,-1%"
-
-:: Главната папка на бота (една ниво нагоре)
 set "ROOT=%UPDATES_DIR%\.."
+set "VERSION_FILE=%UPDATES_DIR%\version.txt"
 
 echo ================================================
 echo   Data Extraction Bot - Прилагане на обновление
 echo ================================================
 echo.
 
-:: Проверка дали има patch файл
-if not exist "%UPDATES_DIR%\update.patch" (
-    echo [ГРЕШКА] Файлът update.patch не е намерен в:
-    echo   %UPDATES_DIR%\
-    echo.
-    echo Поставете update.patch в папката updates\ и опитайте пак.
-    pause
-    exit /b 1
-)
-
 :: Намери git
 where git > nul 2>&1
 if errorlevel 1 (
-    echo [ГРЕШКА] Git не е намерен! Трябва да е инсталиран git.
+    echo [ГРЕШКА] Git не е намерен!
     pause
     exit /b 1
 )
 
-echo Намерен patch файл: update.patch
+:: Прочети текущата версия
+if not exist "%VERSION_FILE%" echo 1.0 > "%VERSION_FILE%"
+set /p CURRENT_VER=<"%VERSION_FILE%"
+set CURRENT_VER=%CURRENT_VER: =%
+echo Инсталирана версия: %CURRENT_VER%
 echo.
 
-:: Провери дали patch-ът може да се приложи
-git -C "%ROOT%" apply --check "%UPDATES_DIR%\update.patch" > nul 2>&1
+:: Намери patch файл (update_X.Y.patch)
+set "PATCH_FILE="
+set "PATCH_VER="
+for %%f in ("%UPDATES_DIR%\update_*.patch") do (
+    set "PATCH_FILE=%%f"
+    set "PATCH_NAME=%%~nf"
+)
+
+if "%PATCH_FILE%"=="" (
+    echo [ГРЕШКА] Няма намерен patch файл в:
+    echo   %UPDATES_DIR%\
+    echo.
+    echo Поставете update_X.Y.patch в папката updates\ и опитайте пак.
+    pause
+    exit /b 1
+)
+
+:: Извлечи версията от името на файла (update_1.1 -> 1.1)
+set "PATCH_VER=%PATCH_NAME:update_=%"
+echo Намерен patch: %PATCH_NAME%.patch  ^(версия %PATCH_VER%^)
+echo.
+
+:: Провери дали може да се приложи
+git -C "%ROOT%" apply --check "%PATCH_FILE%" > nul 2>&1
 if errorlevel 1 (
     echo [ГРЕШКА] Patch файлът не може да се приложи.
     echo Възможно е вече да е приложен или да има конфликт.
     echo.
-    git -C "%ROOT%" apply --check "%UPDATES_DIR%\update.patch"
+    git -C "%ROOT%" apply --check "%PATCH_FILE%"
     pause
     exit /b 1
 )
 
 :: Приложи patch-а
 echo Прилагане на обновлението...
-git -C "%ROOT%" apply "%UPDATES_DIR%\update.patch"
+git -C "%ROOT%" apply "%PATCH_FILE%"
 if errorlevel 1 (
     echo [ГРЕШКА] Неуспешно прилагане на patch.
     pause
     exit /b 1
 )
 
+:: Обнови version.txt
+echo %PATCH_VER%> "%VERSION_FILE%"
+
+:: Изтрий patch файла
+del "%PATCH_FILE%"
+
 echo.
 echo [OK] Обновлението е приложено успешно!
+echo      Версия: %CURRENT_VER% --^> %PATCH_VER%
 echo.
-
-:: Изтрий patch файла след успешно прилагане
-del "%UPDATES_DIR%\update.patch"
-echo Файлът update.patch е изтрит.
-echo.
-
-echo Можете да стартирате бота с START.bat
+echo Стартирайте бота с START.bat
 echo.
 pause
