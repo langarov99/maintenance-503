@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 title Data Extraction Bot - Генериране на обновление
 chcp 65001 > nul
 
@@ -13,11 +14,26 @@ echo ================================================
 echo.
 
 :: Намери git
+set "GIT=git"
 where git > nul 2>&1
 if errorlevel 1 (
-    echo [ГРЕШКА] Git не е намерен!
-    pause
-    exit /b 1
+    set "GIT="
+    for %%P in (
+        "C:\Program Files\Git\cmd\git.exe"
+        "C:\Program Files\Git\bin\git.exe"
+        "C:\Program Files (x86)\Git\cmd\git.exe"
+        "C:\Program Files (x86)\Git\bin\git.exe"
+    ) do (
+        if "!GIT!"=="" if exist %%P set "GIT=%%~P"
+    )
+    if "!GIT!"=="" (
+        echo [ГРЕШКА] Git не е намерен!
+        echo Инсталирайте Git от https://git-scm.com/download/win
+        pause
+        exit /b 1
+    )
+    echo [INFO] Git намерен: !GIT!
+    echo.
 )
 
 :: Прочети текущата версия
@@ -50,7 +66,7 @@ if "%COMMITS%"=="" set COMMITS=1
 set "PATCH_FILE=%UPDATES_DIR%\update_%NEW_VER%.patch"
 echo.
 echo Генериране на update_%NEW_VER%.patch ...
-git -C "%ROOT%" format-patch HEAD~%COMMITS% --stdout > "%PATCH_FILE%"
+"%GIT%" -C "%ROOT%" format-patch HEAD~%COMMITS% --stdout > "%PATCH_FILE%"
 if errorlevel 1 (
     echo [ГРЕШКА] Неуспешно генериране на patch.
     pause

@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 title Data Extraction Bot - Прилагане на обновление
 chcp 65001 > nul
 
@@ -13,11 +14,26 @@ echo ================================================
 echo.
 
 :: Намери git
+set "GIT=git"
 where git > nul 2>&1
 if errorlevel 1 (
-    echo [ГРЕШКА] Git не е намерен!
-    pause
-    exit /b 1
+    set "GIT="
+    for %%P in (
+        "C:\Program Files\Git\cmd\git.exe"
+        "C:\Program Files\Git\bin\git.exe"
+        "C:\Program Files (x86)\Git\cmd\git.exe"
+        "C:\Program Files (x86)\Git\bin\git.exe"
+    ) do (
+        if "!GIT!"=="" if exist %%P set "GIT=%%~P"
+    )
+    if "!GIT!"=="" (
+        echo [ГРЕШКА] Git не е намерен!
+        echo Инсталирайте Git от https://git-scm.com/download/win
+        pause
+        exit /b 1
+    )
+    echo [INFO] Git намерен: !GIT!
+    echo.
 )
 
 :: Прочети текущата версия
@@ -50,19 +66,19 @@ echo Намерен patch: %PATCH_NAME%.patch  ^(версия %PATCH_VER%^)
 echo.
 
 :: Провери дали може да се приложи
-git -C "%ROOT%" apply --check "%PATCH_FILE%" > nul 2>&1
+"%GIT%" -C "%ROOT%" apply --check "%PATCH_FILE%" > nul 2>&1
 if errorlevel 1 (
     echo [ГРЕШКА] Patch файлът не може да се приложи.
     echo Възможно е вече да е приложен или да има конфликт.
     echo.
-    git -C "%ROOT%" apply --check "%PATCH_FILE%"
+    "%GIT%" -C "%ROOT%" apply --check "%PATCH_FILE%"
     pause
     exit /b 1
 )
 
 :: Приложи patch-а
 echo Прилагане на обновлението...
-git -C "%ROOT%" apply "%PATCH_FILE%"
+"%GIT%" -C "%ROOT%" apply "%PATCH_FILE%"
 if errorlevel 1 (
     echo [ГРЕШКА] Неуспешно прилагане на patch.
     pause
