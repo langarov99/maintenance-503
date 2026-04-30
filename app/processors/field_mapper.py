@@ -5078,8 +5078,8 @@ def _parse_bmw_table(table: list[list]) -> list[ProductRecord]:
         disc_val  = _num(disc_idx)  if disc_idx  is not None else None
         if gross_val and disc_val:
             try:
-                net = round(float(gross_val) * (1 - float(disc_val) / 100), 2)
-                price = f"{net} EUR"
+                net = float(gross_val) * (1 - float(disc_val) / 100)
+                price = f"{net:.2f} EUR"
             except (ValueError, ZeroDivisionError):
                 price = f"{gross_val} EUR"
         elif gross_val:
