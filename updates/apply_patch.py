@@ -70,8 +70,15 @@ def _apply_file_diff(block, root_dir):
         file_lines = []
     else:
         try:
-            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                file_lines = f.readlines()
+            # Read with universal newlines — \r\n becomes \n on all platforms
+            with open(abs_path, "r", encoding="utf-8", errors="replace", newline="") as f:
+                raw = f.read().replace("\r\n", "\n").replace("\r", "\n")
+            file_lines = [l + "\n" for l in raw.split("\n")]
+            # Remove the extra empty line added by split at the end
+            if file_lines and file_lines[-1] == "\n":
+                file_lines[-1] = ""
+            if file_lines and file_lines[-1] == "":
+                file_lines.pop()
         except FileNotFoundError:
             file_lines = []
 
@@ -96,11 +103,13 @@ def _apply_file_diff(block, root_dir):
 
         while i < len(lines):
             l = lines[i]
-            if l.startswith("\\ No newline at end of file"):
-                i += 1
-                continue
+            # Stop at next hunk or next file diff
             if l.startswith("@@ ") or l.startswith("diff --git "):
                 break
+            # "\ No newline at end of file" marker — skip
+            if l.startswith("\\"):
+                i += 1
+                continue
             if l.startswith(" "):
                 hunk_old.append(l[1:])
                 hunk_new.append(l[1:])
@@ -108,23 +117,58 @@ def _apply_file_diff(block, root_dir):
                 hunk_old.append(l[1:])
             elif l.startswith("+"):
                 hunk_new.append(l[1:])
+            elif l == "\n" or l.strip() == "":
+                # Bare empty line in patch = empty context line
+                hunk_old.append("\n")
+                hunk_new.append("\n")
             else:
                 break
             i += 1
 
         pos = old_start + delta
-        result_lines[pos : pos + len(hunk_old)] = hunk_new
+
+        # Verify context — if lines don't match, search nearby (±5 lines)
+        if hunk_old and pos < len(result_lines):
+            if not _lines_match(result_lines, pos, hunk_old):
+                found = _fuzzy_find(result_lines, pos, hunk_old)
+                if found is not None:
+                    delta += found - pos
+                    pos = found
+                else:
+                    print(f"  [ПРЕДУПРЕЖДЕНИЕ] Хункът не съвпада на ред {old_start + 1} в {filepath} — пропуснат")
+                    continue
+
+        result_lines[pos: pos + len(hunk_old)] = hunk_new
         delta += len(hunk_new) - len(hunk_old)
 
     parent = os.path.dirname(abs_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
 
-    with open(abs_path, "w", encoding="utf-8", newline="") as f:
+    with open(abs_path, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(result_lines)
 
     action = "нов" if is_new_file else "обновен"
     return (action, filepath)
+
+
+def _lines_match(file_lines, pos, hunk_old):
+    """Check if hunk_old matches file_lines starting at pos."""
+    if pos + len(hunk_old) > len(file_lines):
+        return False
+    for j, hl in enumerate(hunk_old):
+        if file_lines[pos + j].rstrip("\r\n") != hl.rstrip("\r\n"):
+            return False
+    return True
+
+
+def _fuzzy_find(file_lines, expected_pos, hunk_old, radius=10):
+    """Search for hunk_old in file_lines within ±radius of expected_pos."""
+    for offset in range(1, radius + 1):
+        for pos in (expected_pos - offset, expected_pos + offset):
+            if 0 <= pos and _lines_match(file_lines, pos, hunk_old):
+                return pos
+    return None
 
 
 def main():
