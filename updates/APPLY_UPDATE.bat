@@ -29,9 +29,9 @@ echo.
 
 :: Намери patch файл (update_X.Y.patch)
 set "PATCH_FILE="
-set "PATCH_VER="
-for %%f in ("%UPDATES_DIR%\update_*.patch") do (
-    set "PATCH_FILE=%%f"
+set "PATCH_NAME="
+for /f "delims=" %%f in ('dir /b /a-d "%UPDATES_DIR%\update_*.patch" 2^>nul') do (
+    set "PATCH_FILE=%UPDATES_DIR%\%%f"
     set "PATCH_NAME=%%~nf"
 )
 
