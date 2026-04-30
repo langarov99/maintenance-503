@@ -743,6 +743,17 @@ class SupplierCodeMapping:
         return self._loaded and bool(self._map)
 
 
+_bmw_db: Optional[SupplierNameDatabase] = None
+
+
+def get_bmw_db(data_dir: str) -> SupplierNameDatabase:
+    global _bmw_db
+    if _bmw_db is None:
+        _bmw_db = SupplierNameDatabase(data_dir, "bmw-products.xlsx")
+        _bmw_db.load()
+    return _bmw_db
+
+
 _farad_code_map: Optional[SupplierCodeMapping] = None
 
 

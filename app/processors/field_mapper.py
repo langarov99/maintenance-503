@@ -4989,8 +4989,118 @@ def extract_heko_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
-# Auto-switch orchestrator
+# BMW Group / BMW Service
+# Columns: Номенкл.Номер | Описание | Мярка | Кол. | Ед.Цена | Отст | Ст-ст BGN | Ст-ст EUR
 # ---------------------------------------------------------------------------
+
+_BMW_CODE_RE = re.compile(r'^\d{8,13}$')
+
+
+def _is_bmw_document(text: str) -> bool:
+    return bool(re.search(r'BMW\s+Service|BMW\s+Дилър|BMW\s+Dealer', text, re.IGNORECASE)) or \
+           bool(re.search(r'BMW', text, re.IGNORECASE) and
+                re.search(r'Номенкл\.?Номер|Номенкл\b', text, re.IGNORECASE))
+
+
+def _parse_bmw_table(table: list[list]) -> list[ProductRecord]:
+    if not table or len(table) < 2:
+        return []
+
+    # Find header row
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(re.sub(r'\s+', ' ', str(c or "")).lower() for c in row)
+        if "номенкл" in joined and ("кол" in joined or "цена" in joined):
+            header_idx = i
+            break
+
+    if header_idx is not None:
+        headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip()
+                   for c in table[header_idx]]
+
+        def find(kws):
+            for kw in kws:
+                for idx, h in enumerate(headers):
+                    if kw in h:
+                        return idx
+            return None
+
+        code_idx  = find(["номенкл"])          or 0
+        name_idx  = find(["описание", "desc"])  or 1
+        unit_idx  = find(["мярка", "мярк"])
+        qty_idx   = find(["кол"])
+        price_idx = find(["ед.цена", "ед цена", "unit price", "цена"])
+        eur_idx   = find(["ст-ст eur", "eur"])
+        bgn_idx   = find(["ст-ст bgn", "bgn"])
+        data_start = header_idx + 1
+    else:
+        # Continuation page — fixed layout
+        code_idx  = 0
+        name_idx  = 1
+        unit_idx  = 2
+        qty_idx   = 3
+        price_idx = 4
+        eur_idx   = 6
+        bgn_idx   = 5
+        data_start = 0
+
+    records = []
+    for row in table[data_start:]:
+        if not any(str(c or "").strip() for c in row):
+            continue
+
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
+
+        code = cell(code_idx)
+        if not _BMW_CODE_RE.match(code):
+            continue
+
+        name     = cell(name_idx)
+        unit_raw = cell(unit_idx) if unit_idx is not None else "бр."
+        unit     = unit_raw if unit_raw else "бр."
+
+        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        quantity = None
+        if qty_raw and re.match(r'^\d+$', qty_raw):
+            quantity = f"{qty_raw} {unit}"
+
+        def _num(ci):
+            raw = cell(ci).replace(',', '.').replace('\xa0', '').replace(' ', '')
+            return raw if raw and re.match(r'^\d+(?:\.\d+)?$', raw) else None
+
+        price_val = _num(price_idx) if price_idx is not None else None
+        price     = f"{price_val} EUR" if price_val else None
+
+        total_val = _num(eur_idx) if eur_idx is not None else None
+        if total_val is None:
+            total_val = _num(bgn_idx) if bgn_idx is not None else None
+            total_currency = "BGN"
+        else:
+            total_currency = "EUR"
+        total_price = f"{total_val} {total_currency}" if total_val else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code  = code
+        rec.product_name  = name or None
+        rec.quantity      = quantity
+        rec.price         = price
+        rec.total_price   = total_price
+        records.append(rec)
+
+    return records
+
+
+def extract_bmw_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("BMW: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_bmw_table(table))
+    if records:
+        logger.info("BMW: %d records from tables", len(records))
+    return records
 
 class FieldMapper:
     def __init__(self, llm=None):
@@ -5191,6 +5301,14 @@ class FieldMapper:
             records = extract_heko_products(tables, text)
             if records:
                 logger.info("Extraction method: Heko (%d records)", len(records))
+                return records
+
+        # Step 0w — BMW Group / BMW Service (explicit selection or auto-detection)
+        if supplier == "bmw" or (supplier == "auto" and _is_bmw_document(text)):
+            _specific_tried = True
+            records = extract_bmw_products(tables, text)
+            if records:
+                logger.info("Extraction method: BMW (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
