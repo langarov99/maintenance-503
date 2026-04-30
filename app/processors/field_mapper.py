@@ -4993,7 +4993,7 @@ def extract_heko_products(tables: list, text: str = "") -> list[ProductRecord]:
 # Columns: Номенкл.Номер | Описание | Мярка | Кол. | Ед.Цена | Отст | Ст-ст BGN | Ст-ст EUR
 # ---------------------------------------------------------------------------
 
-_BMW_CODE_RE = re.compile(r'^\d{8,13}$')
+_BMW_CODE_RE = re.compile(r'^\d{11}$')
 
 
 def _is_bmw_document(text: str) -> bool:
