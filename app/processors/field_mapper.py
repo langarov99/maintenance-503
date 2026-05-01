@@ -3657,7 +3657,10 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
                 pass
 
         p = _farad_num(cell(price_idx))
-        price = (p + ' EUR') if p is not None else None
+        if p is not None:
+            price = f"{float(p) * 0.36:.3f} EUR"
+        else:
+            price = None
 
         t = _farad_num(cell(total_idx))
         total_price = (t + ' EUR') if t is not None else None
@@ -3715,7 +3718,7 @@ def _parse_farad_from_text(text: str) -> list[ProductRecord]:
 
         price = total_price = None
         if len(decimal_nums) >= 2:
-            price       = decimal_nums[-2] + ' EUR'
+            price       = f"{float(decimal_nums[-2]) * 0.36:.3f} EUR"
             total_price = decimal_nums[-1] + ' EUR'
         elif len(decimal_nums) == 1:
             total_price = decimal_nums[0] + ' EUR'
