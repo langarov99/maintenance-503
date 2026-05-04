@@ -342,9 +342,9 @@ async def extract(
                     else:
                         # Letter code (LOCKY, STARLOCK): keep full catalog_str so
                         # color/type variants remain distinct (Z4/E SC.NERA vs Z4/E BLK).
-                        # The map's translate() will try the full string first, then
-                        # fall back to just the short code (Z4/E) if not found.
-                        rec.product_code = catalog_str
+                        # Strip trailing punctuation (e.g. "GOF." → "GOF") that the
+                        # invoice adds but the catalog/map omits.
+                        rec.product_code = catalog_str.rstrip(".,")
                     # Name: use what the extractor already parsed; try DB as bonus.
                     if not rec.product_name:
                         remainder = original[len(m.group(0)):].strip()
