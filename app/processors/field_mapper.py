@@ -2629,7 +2629,7 @@ def extract_amal_plast_products(tables: list, text: str = "") -> list[ProductRec
 # Section-header rows have short letter-only codes (BO, SP) — no digits → skipped.
 # Number format: Czech comma-decimal  (5,000 = 5 units;  16,60 = 16.60 EUR)
 
-_GZ_CODE_RE = re.compile(r'^\d{4,8}[A-Z]{0,4}$')
+_GZ_CODE_RE = re.compile(r'^[A-Z]{0,2}\d{4,8}[A-Z]{0,4}$')
 
 
 def _is_gumarny_zubri_document(text: str) -> bool:
