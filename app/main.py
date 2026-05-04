@@ -351,11 +351,19 @@ async def extract(
             # Translate Farad invoice codes → internal codes via code map
             farad_map = get_farad_code_map(str(DATA_DIR))
             if farad_map.is_loaded:
+                mapped_n = 0
+                unmapped = []
                 for rec in records:
                     if rec.product_code:
                         mapped = farad_map.translate(rec.product_code)
                         if mapped:
                             rec.product_code = mapped
+                            mapped_n += 1
+                        else:
+                            unmapped.append(rec.product_code)
+                logger.info("Farad code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
+                if unmapped:
+                    logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
 
         # Enrich name from supplier-specific DB
         _name_db_map = {
