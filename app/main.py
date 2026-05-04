@@ -20,7 +20,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_gumarny_zubri_code_map, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -251,9 +251,17 @@ async def extract(
                 if rec.product_code and not rec.product_code.upper().startswith("CP-"):
                     rec.product_code = "CP-" + rec.product_code
 
-        # Gumarny Zubri: add GZ- prefix so codes match the reference DB
-        # Invoice: 222349 → DB: GZ-222349
+        # Gumarny Zubri: translate invoice codes via code map, then add GZ- prefix
+        # Code map: P217134 → 217134 (strips P prefix during transition)
+        # GZ- prefix: 217134 → GZ-217134 (to match reference DB)
         if supplier == "gumarny_zubri":
+            gz_map = get_gumarny_zubri_code_map(str(DATA_DIR))
+            if gz_map.is_loaded:
+                for rec in records:
+                    if rec.product_code:
+                        mapped = gz_map.translate(rec.product_code)
+                        if mapped:
+                            rec.product_code = mapped
             for rec in records:
                 if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
                     rec.product_code = "GZ-" + rec.product_code

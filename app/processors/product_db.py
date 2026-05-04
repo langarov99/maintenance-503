@@ -763,3 +763,14 @@ def get_farad_code_map(data_dir: str) -> SupplierCodeMapping:
         _farad_code_map = SupplierCodeMapping(data_dir, "farad-code-map.xlsx")
         _farad_code_map.load()
     return _farad_code_map
+
+
+_gz_code_map: Optional[SupplierCodeMapping] = None
+
+
+def get_gumarny_zubri_code_map(data_dir: str) -> SupplierCodeMapping:
+    global _gz_code_map
+    if _gz_code_map is None:
+        _gz_code_map = SupplierCodeMapping(data_dir, "gumarny-zubri-code-map.xlsx")
+        _gz_code_map.load()
+    return _gz_code_map
