@@ -335,7 +335,10 @@ async def extract(
                     # No catalog match: extract clean code from invoice string.
                     short_key = m.group(1)
                     if short_key and short_key[0].isdigit():
-                        rec.product_code = "1-" + short_key
+                        # Rack code: the full original already IS the clean code
+                        # (e.g. "1-90241/SIME 2 130"). The regex only captures the
+                        # first fragment — use original to preserve size info.
+                        rec.product_code = original
                     else:
                         rec.product_code = short_key
                     # Name: use what the extractor already parsed; try DB as bonus.
