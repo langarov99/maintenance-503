@@ -19,7 +19,7 @@ from .extractors.pdf_extractor import PDFExtractor
 from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
-from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document
+from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document, _is_gumarny_zubri_document
 from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db
 from .output.excel_writer import write_excel
 
@@ -254,7 +254,7 @@ async def extract(
         # Gumarny Zubri: resolve code against catalog — try with/without P prefix.
         # Invoice may have P217134 or 217134; catalog may store either form.
         # Use whichever variant is found in the catalog; fall back to GZ-<original>.
-        if supplier == "gumarny_zubri":
+        if supplier == "gumarny_zubri" or (supplier == "auto" and _is_gumarny_zubri_document(_doc_text)):
             gz_name_db = get_gumarny_zubri_db(str(DATA_DIR))
             for rec in records:
                 if not rec.product_code:
