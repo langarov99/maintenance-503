@@ -327,6 +327,23 @@ async def extract(
                 if matched_key:
                     if matched_remainder:
                         rec.product_name = matched_remainder
+
+                    # Variant refinement: catalog may have both "Z4/E" and "Z4/E BLK".
+                    # If invoice contains all words of a longer variant key, use it.
+                    # e.g. "Z4/E STARL. BLK 1CH" → Z4/E BLK (BLK present) wins over Z4/E.
+                    if matched_remainder:
+                        inv_words = set(_re.split(r'[\s.,]+', catalog_str.upper()))
+                        inv_words.discard('')
+                        for ck in cat_keys:
+                            if not ck.upper().startswith(matched_key.upper() + " "):
+                                continue
+                            ck_words = set(_re.split(r'[\s.,]+', ck.upper()))
+                            ck_words.discard('')
+                            if ck_words and ck_words.issubset(inv_words) and len(ck) > len(matched_key):
+                                matched_key = ck
+                                matched_remainder = ""
+                                break
+
                     if farad_db.is_loaded:
                         info = farad_db.lookup(matched_key)
                         base_code = (info.internal_code

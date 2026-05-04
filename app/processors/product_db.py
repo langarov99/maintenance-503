@@ -717,7 +717,7 @@ class SupplierCodeMapping:
                     continue
                 if our_code.lower() in ("nan", "") or sup_code.lower() in ("nan", ""):
                     continue
-                key = sup_code.upper()
+                key = re.sub(r'\s+', ' ', sup_code).upper()
                 self._map[key] = our_code
                 # Also index without "1-" prefix so both forms match
                 if key.startswith("1-"):
@@ -741,7 +741,7 @@ class SupplierCodeMapping:
         """
         if not supplier_code or not self._loaded:
             return None
-        key = supplier_code.strip().upper()
+        key = re.sub(r'\s+', ' ', supplier_code.strip()).upper()
         key_stripped = key.rstrip(".,")
 
         candidates = [key]
