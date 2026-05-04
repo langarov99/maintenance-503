@@ -340,7 +340,11 @@ async def extract(
                         # first fragment — use original to preserve size info.
                         rec.product_code = original
                     else:
-                        rec.product_code = short_key
+                        # Letter code (LOCKY, STARLOCK): keep full catalog_str so
+                        # color/type variants remain distinct (Z4/E SC.NERA vs Z4/E BLK).
+                        # The map's translate() will try the full string first, then
+                        # fall back to just the short code (Z4/E) if not found.
+                        rec.product_code = catalog_str
                     # Name: use what the extractor already parsed; try DB as bonus.
                     if not rec.product_name:
                         remainder = original[len(m.group(0)):].strip()

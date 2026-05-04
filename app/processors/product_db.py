@@ -729,13 +729,26 @@ class SupplierCodeMapping:
         self._loaded = True
 
     def translate(self, supplier_code: str) -> Optional[str]:
-        """Return internal code for the given supplier code, or None if not found."""
+        """Return internal code for the given supplier code, or None if not found.
+
+        Tries in order:
+        1. Full string          ("Z4/E SC.NERA 1CH.")
+        2. Without "1-" prefix  ("Z4/E SC.NERA 1CH." from "1-Z4/E SC.NERA 1CH.")
+        3. Short code only      ("Z4/E") — first word, for generic map entries
+        4. Short code stripped  ("Z4/E" from "1-Z4/E")
+        """
         if not supplier_code or not self._loaded:
             return None
         key = supplier_code.strip().upper()
         result = self._map.get(key)
         if result is None and key.startswith("1-"):
             result = self._map.get(key[2:])
+        if result is None:
+            short = key.split()[0]
+            if short != key:
+                result = self._map.get(short)
+                if result is None and short.startswith("1-"):
+                    result = self._map.get(short[2:])
         return result
 
     @property
