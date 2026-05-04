@@ -7,33 +7,33 @@ set "UPDATES_DIR=%~dp0"
 set "UPDATES_DIR=%UPDATES_DIR:~0,-1%"
 set "ROOT=%UPDATES_DIR%\.."
 set "VERSION_FILE=%UPDATES_DIR%\version.txt"
+set "GEN_SCRIPT=%UPDATES_DIR%\generate_update.py"
 
 echo ================================================
 echo   Data Extraction Bot - Генериране на обновление
 echo ================================================
 echo.
 
-:: Намери git
-set "GIT=git"
-where git > nul 2>&1
-if errorlevel 1 (
-    set "GIT="
-    for %%P in (
-        "C:\Program Files\Git\cmd\git.exe"
-        "C:\Program Files\Git\bin\git.exe"
-        "C:\Program Files (x86)\Git\cmd\git.exe"
-        "C:\Program Files (x86)\Git\bin\git.exe"
-    ) do (
-        if "!GIT!"=="" if exist %%P set "GIT=%%~P"
+:: Намери Python (WinPython или системен)
+set "PYTHON="
+for /d %%a in ("%ROOT%\WinPython\*") do (
+    for /d %%b in ("%%a\python-*") do (
+        if exist "%%b\python.exe" set "PYTHON=%%b\python.exe"
     )
-    if "!GIT!"=="" (
-        echo [ГРЕШКА] Git не е намерен!
-        echo Инсталирайте Git от https://git-scm.com/download/win
-        pause
-        exit /b 1
+)
+if not defined PYTHON (
+    for /d %%b in ("%ROOT%\WinPython\python-*") do (
+        if exist "%%b\python.exe" set "PYTHON=%%b\python.exe"
     )
-    echo [INFO] Git намерен: !GIT!
-    echo.
+)
+if not defined PYTHON (
+    where python > nul 2>&1
+    if not errorlevel 1 set "PYTHON=python"
+)
+if not defined PYTHON (
+    echo [ГРЕШКА] Python не е намерен. Инсталирайте WinPython в папката WinPython\
+    pause
+    exit /b 1
 )
 
 :: Прочети текущата версия
@@ -62,13 +62,13 @@ echo.
 set /p COMMITS=Брой commit-и за включване [1]:
 if "%COMMITS%"=="" set COMMITS=1
 
-:: Генерирай patch
-set "PATCH_FILE=%UPDATES_DIR%\update_%NEW_VER%.patch"
+:: Генерирай ZIP
+set "ZIP_FILE=%UPDATES_DIR%\update_%NEW_VER%.zip"
 echo.
-echo Генериране на update_%NEW_VER%.patch ...
-"%GIT%" -C "%ROOT%" format-patch HEAD~%COMMITS% --stdout > "%PATCH_FILE%"
+echo Генериране на update_%NEW_VER%.zip ...
+"%PYTHON%" "%GEN_SCRIPT%" "%ROOT%" "%ZIP_FILE%" %COMMITS%
 if errorlevel 1 (
-    echo [ГРЕШКА] Неуспешно генериране на patch.
+    echo [ГРЕШКА] Неуспешно генериране на обновлението.
     pause
     exit /b 1
 )
@@ -77,7 +77,7 @@ if errorlevel 1 (
 echo %NEW_VER%> "%VERSION_FILE%"
 
 echo.
-echo [OK] Файлът update_%NEW_VER%.patch е създаден в папката updates\
+echo [OK] Файлът update_%NEW_VER%.zip е създаден в папката updates\
 echo.
 echo Изпратете го до другите машини и те трябва да го поставят
 echo в тяхната папка updates\ и да пуснат APPLY_UPDATE.bat
