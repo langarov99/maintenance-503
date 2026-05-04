@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Generate a zip-based update package from recent git commits."""
 import sys
-import os
 import subprocess
 import zipfile
 from pathlib import Path
@@ -9,12 +8,12 @@ from pathlib import Path
 
 def main():
     if len(sys.argv) < 3:
-        print("Употреба: python generate_update.py <root_dir> <output_zip> [commits]")
+        print("Употреба: python generate_update.py <root_dir> <output_zip> [from_ref]")
         sys.exit(1)
 
     root_dir = sys.argv[1]
     output_zip = sys.argv[2]
-    commits = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+    from_ref = sys.argv[3] if len(sys.argv) > 3 else "HEAD~1"
 
     def git(*args):
         return subprocess.run(
@@ -23,18 +22,18 @@ def main():
         )
 
     # Changed/added files
-    r = git("diff", f"HEAD~{commits}", "HEAD", "--name-only", "--diff-filter=ACM")
+    r = git("diff", from_ref, "HEAD", "--name-only", "--diff-filter=ACM")
     if r.returncode != 0:
         print(f"[ГРЕШКА] git diff: {r.stderr.strip()}")
         sys.exit(1)
     changed = [f.strip() for f in r.stdout.splitlines() if f.strip()]
 
     # Deleted files
-    r_del = git("diff", f"HEAD~{commits}", "HEAD", "--name-only", "--diff-filter=D")
+    r_del = git("diff", from_ref, "HEAD", "--name-only", "--diff-filter=D")
     deleted = [f.strip() for f in r_del.stdout.splitlines() if f.strip()]
 
     if not changed and not deleted:
-        print("[ГРЕШКА] Няма промени в последните", commits, "commit(s).")
+        print(f"[ГРЕШКА] Няма промени от {from_ref} до HEAD.")
         sys.exit(1)
 
     with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zf:
