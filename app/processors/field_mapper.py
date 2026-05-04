@@ -2630,6 +2630,8 @@ def extract_amal_plast_products(tables: list, text: str = "") -> list[ProductRec
 # Number format: Czech comma-decimal  (5,000 = 5 units;  16,60 = 16.60 EUR)
 
 _GZ_CODE_RE = re.compile(r'^[A-Z]{0,2}\d{4,8}[A-Z]{0,4}$')
+# Short integer that acts as tax-category separator between description and qty
+_GZ_TAX_SEP_RE = re.compile(r'^\d{1,3}$')
 
 
 def _is_gumarny_zubri_document(text: str) -> bool:
@@ -2647,6 +2649,38 @@ def _gz_num(raw: str) -> str:
         return str(int(f)) if f == int(f) else f"{f:.2f}"
     except ValueError:
         return raw.strip()
+
+
+def _gz_merge_into(existing: "ProductRecord", newer: "ProductRecord") -> None:
+    """Merge a duplicate GZ record into an existing one by summing qty and totals."""
+    # Sum quantity
+    if newer.quantity and existing.quantity:
+        try:
+            q = float(existing.quantity) + float(newer.quantity)
+            existing.quantity = str(int(q)) if q == int(q) else f"{q:.3f}"
+        except ValueError:
+            pass
+    elif newer.quantity and not existing.quantity:
+        existing.quantity = newer.quantity
+
+    # Sum total_price
+    def _strip_eur(s):
+        return s.replace(" EUR", "").strip() if s else ""
+
+    if newer.total_price and existing.total_price:
+        try:
+            t = float(_strip_eur(existing.total_price)) + float(_strip_eur(newer.total_price))
+            existing.total_price = f"{t:.2f} EUR"
+        except ValueError:
+            pass
+    elif newer.total_price and not existing.total_price:
+        existing.total_price = newer.total_price
+
+    # Fill missing fields from newer record
+    if not existing.price and newer.price:
+        existing.price = newer.price
+    if not existing.product_name and newer.product_name:
+        existing.product_name = newer.product_name
 
 
 def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
@@ -2803,38 +2837,45 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
 def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
     """Parse Gumarny Zubri invoice lines from raw text.
 
-    Line format: {code} {desc...} 47 {qty} {price} {unit} {vat%} {rabat%} {total}
-    The "47" token (CZ tax-category number) is mandatory — lines without it are
-    section headers, addresses, or other preamble content.
+    Line format: {code} {desc...} {TAX_NO} {qty} {price} {unit} {vat%} {rabat%} {total}
+    TAX_NO is a short integer (e.g. 47, 21, 0) — the CZ tax-category separator.
+    It is identified as any 1–3 digit token immediately followed by a Czech-format
+    quantity (e.g. 5,000).  This avoids hard-coding "47" and captures items with
+    other tax codes (like P214423FL which may use 21 or 0).
+
+    Duplicate codes are merged: quantities and total prices are summed.
     """
-    records = []
-    seen_codes: set[str] = set()
+    records: list[ProductRecord] = []
+    seen_codes: dict[str, int] = {}  # code → index in records
 
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
         tokens = line.split()
-        if len(tokens) < 3:
+        if len(tokens) < 4:
             continue
         code = tokens[0]
-        if not _GZ_CODE_RE.match(code) or code in seen_codes:
+        if not _GZ_CODE_RE.match(code):
             continue
 
-        # Require "47" (Tax No.) — filters out invoice numbers, addresses, etc.
-        if "47" not in tokens:
+        # Locate tax-category separator: a short integer immediately followed by
+        # a Czech-format decimal (quantity field).
+        sep_idx = None
+        for i in range(1, len(tokens) - 1):
+            if _GZ_TAX_SEP_RE.match(tokens[i]) and re.match(r'^\d+[,.]\d+$', tokens[i + 1]):
+                sep_idx = i
+                break
+        if sep_idx is None:
             continue
 
-        seen_codes.add(code)
-        sep_idx = tokens.index("47")
-
-        # Description: tokens between code and "47"
+        # Description: tokens between code and separator
         desc = " ".join(tokens[1:sep_idx]).strip()[:120] or None
 
-        # After "47": qty price unit vat% rabat% total
+        # After separator: qty price unit vat% rabat% total
         after = tokens[sep_idx + 1:]
 
-        # Quantity: first token after "47" in Czech 3-decimal format (5,000 = 5)
+        # Quantity: first token after separator in Czech 3-decimal format (5,000 = 5)
         qty_str = ""
         if after and re.match(r'^\d+[,.]\d+$', after[0]):
             qty_str = _gz_num(after[0])
@@ -2842,6 +2883,23 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
         # Price/total: 2-decimal comma numbers in document order
         decimals = re.findall(r'\b\d{1,6}[,.]\d{2}\b', line)
 
+        # Duplicate: merge into existing record
+        if code in seen_codes:
+            existing = records[seen_codes[code]]
+            newer = ProductRecord(extraction_method="text")
+            newer.product_code = code
+            newer.product_name = desc
+            newer.quantity = qty_str if qty_str else None
+            if decimals:
+                p = _gz_num(decimals[0])
+                newer.price = (p + " EUR") if p else None
+            if len(decimals) >= 2:
+                t = _gz_num(decimals[-1])
+                newer.total_price = (t + " EUR") if t else None
+            _gz_merge_into(existing, newer)
+            continue
+
+        seen_codes[code] = len(records)
         rec = ProductRecord(extraction_method="text")
         rec.product_code = code
         rec.product_name = desc
@@ -2874,6 +2932,8 @@ def extract_gumarny_zubri_products(tables: list, text: str = "") -> list[Product
             if code not in seen_codes:
                 seen_codes[code] = len(records)
                 records.append(rec)
+            else:
+                _gz_merge_into(records[seen_codes[code]], rec)
 
     # Always supplement with text — fills in records missed by table extraction
     # and patches missing numeric fields on records that table found but couldn't
