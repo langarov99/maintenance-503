@@ -3784,7 +3784,13 @@ def extract_farad_products(tables: list, text: str = "") -> list[ProductRecord]:
                     rec.total_price = t.total_price
                 if t.quantity:
                     rec.quantity = t.quantity
-        records = text_records
+        records = list(text_records)
+        # Add table records whose code doesn't appear in text at all
+        # (color/size variants that the text parser missed)
+        text_codes = {r.product_code for r in text_records}
+        for rec in table_records:
+            if rec.product_code not in text_codes:
+                records.append(rec)
     else:
         records = table_records if table_records else text_records
 
