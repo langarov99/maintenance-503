@@ -3773,26 +3773,20 @@ def extract_farad_products(tables: list, text: str = "") -> list[ProductRecord]:
 
     text_records = _parse_farad_from_text(text) if text else []
 
-    if text_records and table_records:
-        table_by_code = {r.product_code: r for r in table_records}
-        for rec in text_records:
-            t = table_by_code.get(rec.product_code)
-            if t:
-                if t.price:
-                    rec.price = t.price
-                if t.total_price:
-                    rec.total_price = t.total_price
-                if t.quantity:
-                    rec.quantity = t.quantity
-        records = list(text_records)
-        # Add table records whose code doesn't appear in text at all
-        # (color/size variants that the text parser missed)
-        text_codes = {r.product_code for r in text_records}
-        for rec in table_records:
-            if rec.product_code not in text_codes:
-                records.append(rec)
+    # Table records are the primary source — the table parser correctly separates
+    # code from description using dedicated columns. Text parsing merges them and
+    # produces mismatched strings that break deduplication.
+    if table_records:
+        records = list(table_records)
+        if text_records:
+            # Only add text records for codes genuinely absent from table
+            table_first_words = {r.product_code.split()[0] for r in table_records}
+            for rec in text_records:
+                first = rec.product_code.split()[0] if rec.product_code else ""
+                if first not in table_first_words:
+                    records.append(rec)
     else:
-        records = table_records if table_records else text_records
+        records = list(text_records)
 
     records.extend(free_records)
     logger.info("Farad: %d records (table=%d text=%d free=%d)",
