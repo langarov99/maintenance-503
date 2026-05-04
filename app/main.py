@@ -274,30 +274,42 @@ async def extract(
                             break
                 rec.product_code = resolved or ("GZ-" + raw)
 
-        # Farad: catalog stores ALL codes WITHOUT the "1-" invoice prefix.
-        # The PDF/text parser captures the merged "1-<code> <italian desc>"
-        # string as product_code.  We strip "1-", then try the longest catalog
-        # key that is a complete prefix of the remainder to split code from desc.
+        # Farad-specific code resolution.
+        # Priority: code map (original invoice string) → catalog → raw invoice code.
         if supplier == "farad":
             import re as _re
             _farad_code_re = _re.compile(r'^1-([A-Z0-9]+(?:/[A-Z0-9]+)?)', _re.IGNORECASE)
             farad_db = get_farad_db(str(DATA_DIR))
+            farad_map = get_farad_code_map(str(DATA_DIR))
             cat_keys = (sorted(farad_db._by_code.keys(), key=len, reverse=True)
                         if farad_db.is_loaded else [])
+            mapped_n = 0
+            unmapped: list[str] = []
+
             for rec in records:
                 if not rec.product_code:
                     continue
-                original = rec.product_code  # e.g. "1-HA1/E STAR LOCK 1CH ..."
+                original = rec.product_code  # e.g. "1-Z4/E SC.NERA 1CH."
 
                 m = _farad_code_re.match(original)
                 if not m:
                     continue
-                # catalog_str = merged string with "1-" stripped, e.g. "HA1/E STAR LOCK..."
-                catalog_str = original[2:]
 
-                # Find longest catalog key that is a word-boundary prefix.
-                # Some products are stored WITH "1-" in the catalog (racks),
-                # others WITHOUT (bolts/nuts: HA1/E, B12 …).  Try both.
+                # ── Step 1: code map with the original invoice string ────────
+                if farad_map.is_loaded:
+                    mapped = farad_map.translate(original)
+                    if mapped:
+                        rec.product_code = mapped
+                        mapped_n += 1
+                        # Enrich name from catalog if possible
+                        if farad_db.is_loaded and not rec.product_name:
+                            info = farad_db.lookup(mapped)
+                            if info and info.description:
+                                rec.product_name = info.description
+                        continue  # mapping succeeded — skip catalog lookup
+
+                # ── Step 2: catalog matching (fallback) ──────────────────────
+                catalog_str = original[2:]  # strip "1-"
                 matched_key = None
                 matched_remainder = ""
                 for ck in cat_keys:
@@ -323,29 +335,17 @@ async def extract(
                         if info and info.description:
                             rec.product_name = info.description
                     else:
-                        info = None
                         base_code = matched_key
-                    # Rack codes start with a digit → restore "1-" prefix.
-                    # Bolt/nut codes start with a letter → use as-is.
-                    if base_code and base_code[0].isdigit():
-                        rec.product_code = "1-" + base_code
-                    else:
-                        rec.product_code = base_code
+                    rec.product_code = ("1-" + base_code
+                                        if base_code and base_code[0].isdigit()
+                                        else base_code)
                 else:
-                    # No catalog match: extract clean code from invoice string.
+                    # ── Step 3: no match — clean raw invoice code ────────────
                     short_key = m.group(1)
                     if short_key and short_key[0].isdigit():
-                        # Rack code: the full original already IS the clean code
-                        # (e.g. "1-90241/SIME 2 130"). The regex only captures the
-                        # first fragment — use original to preserve size info.
                         rec.product_code = original
                     else:
-                        # Letter code (LOCKY, STARLOCK): keep full catalog_str so
-                        # color/type variants remain distinct (Z4/E SC.NERA vs Z4/E BLK).
-                        # Strip trailing punctuation (e.g. "GOF." → "GOF") that the
-                        # invoice adds but the catalog/map omits.
                         rec.product_code = catalog_str.rstrip(".,")
-                    # Name: use what the extractor already parsed; try DB as bonus.
                     if not rec.product_name:
                         remainder = original[len(m.group(0)):].strip()
                         if remainder:
@@ -355,22 +355,11 @@ async def extract(
                         if info and info.description:
                             rec.product_name = info.description
 
-            # Translate Farad invoice codes → internal codes via code map
-            farad_map = get_farad_code_map(str(DATA_DIR))
-            if farad_map.is_loaded:
-                mapped_n = 0
-                unmapped = []
-                for rec in records:
-                    if rec.product_code:
-                        mapped = farad_map.translate(rec.product_code)
-                        if mapped:
-                            rec.product_code = mapped
-                            mapped_n += 1
-                        else:
-                            unmapped.append(rec.product_code)
-                logger.info("Farad code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
-                if unmapped:
-                    logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
+                unmapped.append(rec.product_code)
+
+            logger.info("Farad code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
+            if unmapped:
+                logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
 
         # Enrich name from supplier-specific DB
         _name_db_map = {
