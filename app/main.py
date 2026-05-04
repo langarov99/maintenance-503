@@ -20,7 +20,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_gumarny_zubri_code_map, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -251,20 +251,28 @@ async def extract(
                 if rec.product_code and not rec.product_code.upper().startswith("CP-"):
                     rec.product_code = "CP-" + rec.product_code
 
-        # Gumarny Zubri: translate invoice codes via code map, then add GZ- prefix
-        # Code map: P217134 → 217134 (strips P prefix during transition)
-        # GZ- prefix: 217134 → GZ-217134 (to match reference DB)
+        # Gumarny Zubri: resolve code against catalog — try with/without P prefix.
+        # Invoice may have P217134 or 217134; catalog may store either form.
+        # Use whichever variant is found in the catalog; fall back to GZ-<original>.
         if supplier == "gumarny_zubri":
-            gz_map = get_gumarny_zubri_code_map(str(DATA_DIR))
-            if gz_map.is_loaded:
-                for rec in records:
-                    if rec.product_code:
-                        mapped = gz_map.translate(rec.product_code)
-                        if mapped:
-                            rec.product_code = mapped
+            gz_name_db = get_gumarny_zubri_db(str(DATA_DIR))
             for rec in records:
-                if rec.product_code and not rec.product_code.upper().startswith("GZ-"):
-                    rec.product_code = "GZ-" + rec.product_code
+                if not rec.product_code:
+                    continue
+                raw = rec.product_code
+                # Build variants: with P and without P
+                if raw.upper().startswith("P") and len(raw) > 1:
+                    variants = [raw, raw[1:]]           # P217134, 217134
+                else:
+                    variants = [raw, "P" + raw]         # 217134, P217134
+                # Try each variant with GZ- prefix in the catalog
+                resolved = None
+                if gz_name_db.is_loaded:
+                    for v in variants:
+                        if gz_name_db.lookup("GZ-" + v):
+                            resolved = "GZ-" + v
+                            break
+                rec.product_code = resolved or ("GZ-" + raw)
 
         # Farad: catalog stores ALL codes WITHOUT the "1-" invoice prefix.
         # The PDF/text parser captures the merged "1-<code> <italian desc>"
