@@ -3753,12 +3753,23 @@ def extract_farad_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Farad: %d table(s) received", len(tables))
 
     table_records: list[ProductRecord] = []
+    free_records: list[ProductRecord] = []
     seen: set[str] = set()
+    seen_free: set[str] = set()
     for table in tables:
         for rec in _parse_farad_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            try:
+                is_free = rec.price is not None and float(rec.price.replace(" EUR", "")) == 0.0
+            except (ValueError, AttributeError):
+                is_free = False
+            if is_free:
+                if rec.product_code not in seen_free:
+                    seen_free.add(rec.product_code)
+                    free_records.append(rec)
+            else:
+                if rec.product_code not in seen:
+                    seen.add(rec.product_code)
+                    table_records.append(rec)
 
     text_records = _parse_farad_from_text(text) if text else []
 
@@ -3777,8 +3788,9 @@ def extract_farad_products(tables: list, text: str = "") -> list[ProductRecord]:
     else:
         records = table_records if table_records else text_records
 
-    logger.info("Farad: %d records (table=%d text=%d)",
-                len(records), len(table_records), len(text_records))
+    records.extend(free_records)
+    logger.info("Farad: %d records (table=%d text=%d free=%d)",
+                len(records), len(table_records), len(text_records), len(free_records))
     return records
 
 
