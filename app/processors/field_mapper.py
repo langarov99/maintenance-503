@@ -2651,6 +2651,16 @@ def _gz_num(raw: str) -> str:
         return raw.strip()
 
 
+def _gz_eff_price(list_price_raw: str, rabat_raw: str) -> str:
+    """Effective unit price after Czech rabat (discount) percentage."""
+    try:
+        lp = float(list_price_raw.replace(',', '.'))
+        rabat = float(rabat_raw.replace(',', '.'))
+        return f"{lp * (1 - rabat / 100):.2f}"
+    except ValueError:
+        return _gz_num(list_price_raw)
+
+
 def _gz_merge_into(existing: "ProductRecord", newer: "ProductRecord") -> None:
     """Merge a duplicate GZ record into an existing one by summing qty and totals."""
     # Sum quantity
@@ -2727,6 +2737,7 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
         # "unit" must not accidentally match "quantity" — check explicitly
         unit_idx  = find(["unit no", "unit"])
         price_idx = find(["price"])
+        rabat_idx = find(["rabat"])
         # "total amount" before plain "total" to avoid matching quantity/total confusion
         total_idx = find(["total amount", "total"])
 
@@ -2748,8 +2759,8 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
             logger.info("Gumarny Zubri: header degenerate (merged cells) — falling to Phase 2")
             header_idx = None  # force Phase 2 below
         else:
-            logger.info("Gumarny Zubri: cols — code=%s desc=%s qty=%s unit=%s price=%s total=%s",
-                        code_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
+            logger.info("Gumarny Zubri: cols — code=%s desc=%s qty=%s unit=%s price=%s rabat=%s total=%s",
+                        code_idx, desc_idx, qty_idx, unit_idx, price_idx, rabat_idx, total_idx)
             data_start = header_idx + 1
 
     if header_idx is None:
@@ -2770,11 +2781,13 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
             return []
         # Column layout relative to code column:
         # code | desc | tax_no | qty | price | unit | vat% | rabat% | total
+        # Column layout: code | desc | tax_no | qty | price | unit | vat% | rabat% | total
         code_idx  = best
         desc_idx  = best + 1 if best + 1 < ncols else None
         qty_idx   = best + 3 if best + 3 < ncols else None
         price_idx = best + 4 if best + 4 < ncols else None
         unit_idx  = best + 5 if best + 5 < ncols else None
+        rabat_idx = best + 7 if best + 7 < ncols else None
         total_idx = best + 8 if best + 8 < ncols else None
         # If no numeric columns are reachable (table too narrow) the data is
         # useless — text extraction will handle these rows.
@@ -2782,8 +2795,8 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
             logger.info("Gumarny Zubri: continuation table too narrow — skipping, text will cover")
             return []
         logger.info("Gumarny Zubri: continuation cols — code=%d desc=%s qty=%s "
-                    "price=%s unit=%s total=%s",
-                    code_idx, desc_idx, qty_idx, price_idx, unit_idx, total_idx)
+                    "price=%s unit=%s rabat=%s total=%s",
+                    code_idx, desc_idx, qty_idx, price_idx, unit_idx, rabat_idx, total_idx)
         data_start = 0
 
     if code_idx is None:
@@ -2817,8 +2830,9 @@ def _parse_gumarny_zubri_table(table: list[list]) -> list[ProductRecord]:
                 rec.quantity = qty_str + (" " + unit_raw if unit_raw else "")
 
         price_raw = cell(row, price_idx) if price_idx is not None else ""
+        rabat_raw = cell(row, rabat_idx) if rabat_idx is not None else ""
         if price_raw:
-            p = _gz_num(price_raw)
+            p = _gz_eff_price(price_raw, rabat_raw) if rabat_raw else _gz_num(price_raw)
             if p:
                 rec.price = p + " EUR"
 
@@ -2880,8 +2894,18 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
         if after and re.match(r'^\d+[,.]\d+$', after[0]):
             qty_str = _gz_num(after[0])
 
-        # Price/total: 2-decimal comma numbers in document order
-        decimals = re.findall(r'\b\d{1,6}[,.]\d{2}\b', line)
+        # 2-decimal numbers from the *after* section only (avoids false matches in desc)
+        # Layout: price | unit | vat% | rabat% | total
+        # e.g.   18,90   Set    0,00   40,00    56,70  → after_dec = ['18,90','0,00','40,00','56,70']
+        after_dec = re.findall(r'\b\d{1,6}[,.]\d{2}\b', ' '.join(after))
+
+        # Effective unit price: list_price × (1 − rabat/100)
+        price_eff = ""
+        if after_dec:
+            rabat_raw = after_dec[-2] if len(after_dec) >= 3 else ""
+            price_eff = _gz_eff_price(after_dec[0], rabat_raw) if rabat_raw else _gz_num(after_dec[0])
+
+        total_eff = _gz_num(after_dec[-1]) if after_dec else ""
 
         # Duplicate: merge into existing record
         if code in seen_codes:
@@ -2890,12 +2914,8 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
             newer.product_code = code
             newer.product_name = desc
             newer.quantity = qty_str if qty_str else None
-            if decimals:
-                p = _gz_num(decimals[0])
-                newer.price = (p + " EUR") if p else None
-            if len(decimals) >= 2:
-                t = _gz_num(decimals[-1])
-                newer.total_price = (t + " EUR") if t else None
+            newer.price = (price_eff + " EUR") if price_eff else None
+            newer.total_price = (total_eff + " EUR") if total_eff else None
             _gz_merge_into(existing, newer)
             continue
 
@@ -2906,14 +2926,10 @@ def _parse_gumarny_zubri_from_text(text: str) -> list[ProductRecord]:
 
         if qty_str:
             rec.quantity = qty_str
-        if decimals:
-            p = _gz_num(decimals[0])
-            if p:
-                rec.price = p + " EUR"
-        if len(decimals) >= 2:
-            t = _gz_num(decimals[-1])
-            if t:
-                rec.total_price = t + " EUR"
+        if price_eff:
+            rec.price = price_eff + " EUR"
+        if total_eff:
+            rec.total_price = total_eff + " EUR"
 
         records.append(rec)
 
