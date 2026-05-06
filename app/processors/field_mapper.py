@@ -3682,7 +3682,8 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
         desc_idx  = find(["description", "descrizione"])
         um_idx    = find(["um"])
         qty_idx   = find(["qty", "quantit"])
-        price_idx = find(["netto", "net price"])
+        price_idx = find(["netto", "net price", "prezzo netto", "p.netto",
+                          "unit price", "prezzo unit", "prezzo"])
         total_idx = find(["imponibile", "amount"])
         data_start = header_idx + 1
     else:
@@ -3733,13 +3734,20 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
                 pass
 
         p = _farad_num(cell(price_idx), decimals=3)
-        if p is not None:
-            price = p + " EUR"
-        else:
-            price = None
+        price = (p + " EUR") if p is not None else None
 
         t = _farad_num(cell(total_idx))
         total_price = (t + ' EUR') if t is not None else None
+
+        # Fallback: derive unit price from total ÷ qty when price column absent
+        if price is None and total_price and quantity:
+            try:
+                qty_n = int(quantity.split()[0])
+                total_f = float(total_price.replace(' EUR', ''))
+                if qty_n > 0:
+                    price = f"{total_f / qty_n:.3f} EUR"
+            except (ValueError, ZeroDivisionError):
+                pass
 
         logger.info("Farad code=%s qty=%s price=%s total=%s", code, quantity, price, total_price)
 
