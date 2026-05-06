@@ -3707,7 +3707,7 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
         code_parts = [p.strip() for p in raw_code_cell.split('\n') if p.strip()]
         code = code_parts[0] if code_parts else ""
 
-        if not code or not re.match(r'^1-', code, re.IGNORECASE):
+        if not code or not re.match(r'^1-|\d{4,6}/', code, re.IGNORECASE):
             continue
 
         # Description: prefer dedicated column; fall back to embedded part.
@@ -3770,8 +3770,8 @@ def _parse_farad_from_text(text: str) -> list[ProductRecord]:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        # Line starts with 1- code, then description, then UM, then numbers
-        m = re.match(r'^(1-\S+(?:\s+\S+){0,5}?)\s+(NR|C\.?)\s+([\d,]+)', line, re.IGNORECASE)
+        # Line starts with 1- code (or bare numeric code like 90241/8 110), then UM, then numbers
+        m = re.match(r'^((?:1-)?\d[\w/]*(?:\s+\S+){0,5}?)\s+(NR|C\.?)\s+([\d,]+)', line, re.IGNORECASE)
         if not m:
             i += 1
             continue
