@@ -3633,14 +3633,14 @@ def _is_farad_document(text: str) -> bool:
                           text, re.IGNORECASE))
 
 
-def _farad_num(s: str) -> str | None:
+def _farad_num(s: str, decimals: int = 2) -> str | None:
     """Italian decimal format: 1.202,04 → 1202.04"""
     s = (s or "").strip()
     if not s:
         return None
     converted = s.replace('.', '').replace(',', '.')
     try:
-        return f"{float(converted):.2f}"
+        return f"{float(converted):.{decimals}f}"
     except ValueError:
         return None
 
@@ -3732,7 +3732,7 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
             except ValueError:
                 pass
 
-        p = _farad_num(cell(price_idx))
+        p = _farad_num(cell(price_idx), decimals=3)
         if p is not None:
             price = p + " EUR"
         else:
@@ -3788,16 +3788,16 @@ def _parse_farad_from_text(text: str) -> list[ProductRecord]:
         # Numbers after qty: unit_price disc net_price amount
         # Discount is like "60+10%" — skip non-pure-decimal tokens
         rest = line[m.end():].strip()
-        decimal_nums = [_farad_num(tok) for tok in re.split(r'\s+', rest)
+        decimal_nums = [_farad_num(tok, decimals=3) for tok in re.split(r'\s+', rest)
                         if re.match(r'^[\d.,]+$', tok)]
         decimal_nums = [v for v in decimal_nums if v is not None]
 
         price = total_price = None
         if len(decimal_nums) >= 2:
-            price       = f"{float(decimal_nums[-2]) * 0.36:.3f} EUR"
-            total_price = decimal_nums[-1] + ' EUR'
+            price       = decimal_nums[-2] + ' EUR'
+            total_price = _farad_num(decimal_nums[-1]) + ' EUR'
         elif len(decimal_nums) == 1:
-            total_price = decimal_nums[0] + ' EUR'
+            total_price = _farad_num(decimal_nums[0]) + ' EUR'
 
         # Description: collect continuation lines before next 1- code
         name_parts: list[str] = []
