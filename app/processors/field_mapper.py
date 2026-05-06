@@ -3734,7 +3734,7 @@ def _parse_farad_table(table: list[list]) -> list[ProductRecord]:
 
         p = _farad_num(cell(price_idx))
         if p is not None:
-            price = f"{float(p) * 0.36:.3f} EUR"
+            price = p + " EUR"
         else:
             price = None
 
