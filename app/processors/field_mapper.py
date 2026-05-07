@@ -5263,6 +5263,103 @@ def extract_bmw_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bardahl (distributor: ДНВ Проспийт ЕООД / ProSpeed)
+# Bulgarian invoice columns: No, Код (BAR-XXXX), Наименование, К-во, Мярка, Ед. цена, ТО%, Стойност
+# ---------------------------------------------------------------------------
+
+def _is_bardahl_document(text: str) -> bool:
+    return bool(re.search(r'bardahl', text, re.IGNORECASE))
+
+
+_BARDAHL_CODE_RE = re.compile(r'^BAR-\d{3,5}$', re.IGNORECASE)
+
+
+def _bardahl_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_bardahl_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = None
+    kod_idx = name_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if re.search(r'\bкод\b', joined) and re.search(r'\bнаименование\b|\bстока\b', joined):
+            header_idx = i
+            headers = [str(c or "").lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            kod_idx   = _find(["код"])
+            name_idx  = _find(["наименование", "стока"])
+            qty_idx   = _find(["к-во", "кол", "qty"])
+            price_idx = _find(["ед. цена", "ед.цена", "цена"])
+            total_idx = _find(["стойност", "total"])
+            break
+
+    if header_idx is None:
+        logger.warning("Bardahl: no header row found in table (%d rows)", len(table))
+        return []
+
+    logger.info("Bardahl header at row %d: kod=%s name=%s qty=%s price=%s total=%s",
+                header_idx, kod_idx, name_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
+
+        code = cell(kod_idx).upper()
+        if not _BARDAHL_CODE_RE.match(code):
+            continue
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = cell(name_idx) or None
+
+        qty_raw = cell(qty_idx)
+        if qty_raw:
+            rec.quantity = qty_raw
+
+        price_val = _bardahl_num(cell(price_idx))
+        if price_val:
+            rec.price = price_val + " лв."
+
+        total_val = _bardahl_num(cell(total_idx))
+        if total_val:
+            rec.total_price = total_val + " лв."
+
+        records.append(rec)
+        logger.info("Bardahl: code=%s qty=%s price=%s total=%s | %s",
+                    code, qty_raw, price_val, total_val, (rec.product_name or "")[:50])
+
+    return records
+
+
+def extract_bardahl_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Bardahl: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_bardahl_table(table))
+    if records:
+        logger.info("Bardahl: %d records from tables", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Wunder-Baum (distributor: Ауто Ойлс-ЕООД)
 # Bulgarian invoice columns: №, Код (EAN-13), Стока, Мярка, Кол., Цена, ДДС %, Стойност
 # ---------------------------------------------------------------------------
@@ -5665,6 +5762,14 @@ class FieldMapper:
             records = extract_bmw_products(tables, text)
             if records:
                 logger.info("Extraction method: BMW (%d records)", len(records))
+                return records
+
+        # Step 0y — Bardahl / ProSpeed (explicit selection or auto-detection)
+        if supplier == "bardahl" or (supplier == "auto" and _is_bardahl_document(text)):
+            _specific_tried = True
+            records = extract_bardahl_products(tables, text)
+            if records:
+                logger.info("Extraction method: Bardahl (%d records)", len(records))
                 return records
 
         # Step 0x — Wunder-Baum (explicit selection or auto-detection)

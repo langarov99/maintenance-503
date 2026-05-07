@@ -907,6 +907,16 @@ def get_wunder_baum_db(data_dir: str) -> WunderBaumDatabase:
 
 _wb_code_map: Optional[SupplierCodeMapping] = None
 
+_bardahl_db: Optional[SupplierNameDatabase] = None
+
+
+def get_bardahl_db(data_dir: str) -> SupplierNameDatabase:
+    global _bardahl_db
+    if _bardahl_db is None:
+        _bardahl_db = SupplierNameDatabase(data_dir, "bardahl-products.xlsx")
+        _bardahl_db.load()
+    return _bardahl_db
+
 
 def get_wunder_baum_code_map(data_dir: str) -> SupplierCodeMapping:
     global _wb_code_map
