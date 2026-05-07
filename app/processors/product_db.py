@@ -712,11 +712,14 @@ class SupplierCodeMapping:
 
             for _, row in df.iterrows():
                 our_code = str(row[col_our]).strip()
-                sup_code = str(row[col_sup]).strip()
+                sup_code = ProductDatabase._clean_val(str(row[col_sup]).strip())
                 if not our_code or not sup_code:
                     continue
                 if our_code.lower() in ("nan", "") or sup_code.lower() in ("nan", ""):
                     continue
+                # Strip trailing .0 from numeric codes read as floats
+                if re.match(r'^\d+\.0$', sup_code):
+                    sup_code = sup_code[:-2]
                 key = re.sub(r'\s+', ' ', sup_code).upper()
                 self._map[key] = our_code
                 # Also index without "1-" prefix so both forms match
