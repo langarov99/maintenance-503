@@ -455,13 +455,13 @@ async def extract(
                         if info.description:
                             rec.product_name = info.description
                             enriched_n += 1
-                    elif rec.is_new_product:
+                    elif _name_supplier == "wunder_baum" and rec.is_new_product:
                         not_found.append(rec.product_code or "(empty)")
                 if enriched_n:
                     logger.info("%s: name DB enriched %d records", _name_supplier, enriched_n)
-                if not_found:
-                    logger.info("%s: NOT found in DB (%d): %s",
-                                _name_supplier, len(not_found), ", ".join(not_found))
+                if not_found and _name_supplier == "wunder_baum":
+                    logger.info("wunder_baum: NOT found in DB (%d): %s",
+                                len(not_found), ", ".join(not_found))
 
                 # Ma*Fra description-based recovery: scan OCR lines and match
                 # products whose code is unreadable but description is legible.
