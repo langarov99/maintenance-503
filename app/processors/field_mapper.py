@@ -5355,13 +5355,81 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+_WB_EAN_RE = re.compile(r'\b(76\d{11})\b')
+
+
+def _parse_wunder_baum_from_text(text: str, seen_eans: set[str]) -> list[ProductRecord]:
+    """Scan raw text for Wunder-Baum EAN codes not captured by the table parser."""
+    records = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = _WB_EAN_RE.search(line)
+        if not m:
+            continue
+        ean = m.group(1)
+        if ean in seen_eans:
+            continue
+
+        # Collect this line plus next 2 lines; stop at the next EAN occurrence
+        block_lines = [line]
+        for nl in lines[i + 1:i + 3]:
+            if _WB_EAN_RE.search(nl):
+                break
+            block_lines.append(nl)
+        block = " ".join(block_lines)
+
+        # Description: text after the EAN on the same line, up to first digit group
+        after_ean = line[m.end():].strip()
+        name = re.split(r'\s+\d+[,.]?\d*\s', after_ean)[0].strip() or None
+
+        # Find integers (qty) and decimals (price, total) in the block after EAN
+        after_block = block[block.index(ean) + len(ean):]
+        decimals = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_block)
+        integers = re.findall(r'\b(\d{1,4})\b', after_block)
+
+        qty_val   = integers[0] if integers else None
+        price_val = _wb_num(decimals[0]) if len(decimals) >= 1 else None
+        total_val = _wb_num(decimals[-1]) if len(decimals) >= 2 else None
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = ean
+        rec.product_name = name
+        rec.ean          = ean
+        if qty_val:
+            rec.quantity = qty_val
+        if price_val:
+            rec.price = price_val + " лв."
+        if total_val:
+            rec.total_price = total_val + " лв."
+
+        seen_eans.add(ean)
+        records.append(rec)
+        logger.info("WB text fallback: code=%s qty=%s price=%s total=%s | %s",
+                    ean, qty_val, price_val, total_val, (name or "")[:50])
+
+    return records
+
+
 def extract_wunder_baum_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Wunder-Baum: %d table(s) received", len(tables))
     records = []
+    seen_eans: set[str] = set()
     for table in tables:
-        records.extend(_parse_wunder_baum_table(table))
+        recs = _parse_wunder_baum_table(table)
+        for r in recs:
+            if r.ean:
+                seen_eans.add(r.ean)
+        records.extend(recs)
     if records:
         logger.info("Wunder-Baum: %d records from tables", len(records))
+
+    # Text supplement — catch rows the table parser missed
+    if text:
+        extra = _parse_wunder_baum_from_text(text, seen_eans)
+        if extra:
+            logger.info("Wunder-Baum: %d additional records from text", len(extra))
+            records.extend(extra)
+
     return records
 
 
