@@ -378,7 +378,8 @@ async def extract(
             if unmapped:
                 logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
 
-        # Wunder-Baum: translate EAN → internal code via code map
+        # Wunder-Baum: translate supplier code → internal code via code map
+        _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
         if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(_doc_text)):
             wb_map = get_wunder_baum_code_map(str(DATA_DIR))
             if wb_map.is_loaded:
@@ -387,13 +388,15 @@ async def extract(
                 for rec in records:
                     if not rec.product_code:
                         continue
-                    mapped = wb_map.translate(rec.product_code)
+                    original_code = rec.product_code
+                    mapped = wb_map.translate(original_code)
                     if mapped:
                         rec.product_code = mapped
                         rec.is_new_product = False
+                        _wb_reverse[mapped.upper()] = original_code
                         mapped_n += 1
                     else:
-                        unmapped.append(rec.product_code)
+                        unmapped.append(original_code)
                 logger.info("Wunder-Baum code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Wunder-Baum unmapped codes: %s", ", ".join(unmapped))
@@ -435,15 +438,30 @@ async def extract(
             name_db = _name_db_map[_name_supplier](str(DATA_DIR))
             if name_db.is_loaded:
                 enriched_n = 0
+                not_found = []
                 for rec in records:
                     info = name_db.lookup(rec.product_code)
+                    # Wunder-Baum: if direct lookup fails, retry with original supplier code
+                    # (code map translated supplier code → internal code, but catalog uses supplier code as Код)
+                    if info is None and _name_supplier == "wunder_baum" and _wb_reverse:
+                        orig_sup_code = _wb_reverse.get((rec.product_code or "").upper())
+                        if orig_sup_code:
+                            info = name_db.lookup(orig_sup_code)
+                            if info:
+                                logger.debug("WB reverse lookup: %s → %s (via orig code %s)",
+                                             rec.product_code, info.internal_code, orig_sup_code)
                     if info:
                         rec.is_new_product = False
                         if info.description:
                             rec.product_name = info.description
                             enriched_n += 1
+                    elif rec.is_new_product:
+                        not_found.append(rec.product_code or "(empty)")
                 if enriched_n:
                     logger.info("%s: name DB enriched %d records", _name_supplier, enriched_n)
+                if not_found:
+                    logger.info("%s: NOT found in DB (%d): %s",
+                                _name_supplier, len(not_found), ", ".join(not_found))
 
                 # Ma*Fra description-based recovery: scan OCR lines and match
                 # products whose code is unreadable but description is legible.
