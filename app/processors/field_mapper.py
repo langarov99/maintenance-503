@@ -5261,7 +5261,118 @@ def extract_bmw_products(tables: list, text: str = "") -> list[ProductRecord]:
         logger.info("BMW: %d records from tables", len(records))
     return records
 
-class FieldMapper:
+
+# ---------------------------------------------------------------------------
+# Wunder-Baum (distributor: Ауто Ойлс-ЕООД)
+# Bulgarian invoice columns: №, Код (EAN-13), Стока, Мярка, Кол., Цена, ДДС %, Стойност
+# ---------------------------------------------------------------------------
+
+def _is_wunder_baum_document(text: str) -> bool:
+    return bool(re.search(r'wunder.?baum', text, re.IGNORECASE))
+
+
+_WB_ARTICLE_RE = re.compile(r'-(\d{7,9})\s*$')
+
+
+def _wb_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    for i, row in enumerate(table[:5]):
+        logger.info("WB table row[%d]: %s", i, [str(c or "")[:40] for c in row])
+
+    # Find header row (contains Код, Стока, Кол.)
+    header_idx = None
+    kod_idx = name_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if re.search(r'\bкод\b', joined) and re.search(r'\bстока\b|\bкол\b', joined):
+            header_idx = i
+            headers = [str(c or "").lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            kod_idx   = _find(["код"])
+            name_idx  = _find(["стока", "описание", "наименование"])
+            qty_idx   = _find(["кол", "qty", "количество"])
+            price_idx = _find(["цена", "price"])
+            total_idx = _find(["стойност", "ст-ст", "total", "сумма"])
+            break
+
+    if header_idx is None:
+        logger.warning("WB: no header row found in table (%d rows)", len(table))
+        return []
+
+    logger.info("WB header at row %d: kod=%s name=%s qty=%s price=%s total=%s",
+                header_idx, kod_idx, name_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
+
+        # EAN: clean all whitespace/linebreaks, then check for 8-14 digit sequence
+        ean_raw = re.sub(r'\s+', '', cell(kod_idx)) if kod_idx is not None else ""
+        ean_clean = re.sub(r'[^0-9]', '', ean_raw)
+        if not re.match(r'^\d{8,14}$', ean_clean):
+            continue  # header or totals row
+
+        name_raw = cell(name_idx) if name_idx is not None else ""
+
+        # Extract Wunder-Baum article number from end of description (e.g. "-40048914")
+        article = None
+        name = name_raw
+        am = _WB_ARTICLE_RE.search(name_raw)
+        if am:
+            article = am.group(1)
+            name = name_raw[:am.start()].rstrip(" -").strip()
+
+        code = f"WB-{article}" if article else ean_clean
+
+        qty_raw   = cell(qty_idx)
+        price_val = _wb_num(cell(price_idx))
+        total_val = _wb_num(cell(total_idx))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name or None
+        rec.ean          = ean_clean
+        if qty_raw:
+            rec.quantity = qty_raw
+        if price_val:
+            rec.price = price_val + " лв."
+        if total_val:
+            rec.total_price = total_val + " лв."
+
+        records.append(rec)
+        logger.info("WB: code=%s ean=%s qty=%s price=%s total=%s | %s",
+                    code, ean_clean, qty_raw, price_val, total_val, (name or "")[:50])
+
+    return records
+
+
+def extract_wunder_baum_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Wunder-Baum: %d table(s) received", len(tables))
+    records = []
+    for table in tables:
+        records.extend(_parse_wunder_baum_table(table))
+    if records:
+        logger.info("Wunder-Baum: %d records from tables", len(records))
+    return records
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
 
@@ -5468,6 +5579,14 @@ class FieldMapper:
             records = extract_bmw_products(tables, text)
             if records:
                 logger.info("Extraction method: BMW (%d records)", len(records))
+                return records
+
+        # Step 0x — Wunder-Baum (explicit selection or auto-detection)
+        if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(text)):
+            _specific_tried = True
+            records = extract_wunder_baum_products(tables, text)
+            if records:
+                logger.info("Extraction method: Wunder-Baum (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

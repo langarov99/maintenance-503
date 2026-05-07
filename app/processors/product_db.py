@@ -799,3 +799,101 @@ def get_gumarny_zubri_code_map(data_dir: str) -> SupplierCodeMapping:
         _gz_code_map = SupplierCodeMapping(data_dir, "gumarny-zubri-code-map.xlsx")
         _gz_code_map.load()
     return _gz_code_map
+
+
+# ---------------------------------------------------------------------------
+# Wunder-Baum product catalog
+# File: wunder-baum-products.xlsx
+# Columns auto-detected: internal code, description, optionally EAN barcode.
+# Lookup by: WB-XXXXXXXX code, raw article number, or EAN barcode.
+# ---------------------------------------------------------------------------
+
+class WunderBaumDatabase:
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self._by_code: dict[str, ProductInfo] = {}  # code.upper() → info
+        self._by_ean: dict[str, ProductInfo] = {}   # ean → info
+        self._loaded = False
+
+    def load(self):
+        path = self.data_dir / "wunder-baum-products.xlsx"
+        if not path.exists():
+            logger.info("WunderBaum DB not found (optional): %s", path)
+            self._loaded = True
+            return
+        try:
+            df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+            df = df.fillna("")
+            headers = [str(c).lower().strip() for c in df.columns]
+
+            code_idx = ProductDatabase._find_col(
+                headers, ["код", "code", "артикул", "article", "ref", "item"]
+            ) or 0
+            desc_idx = ProductDatabase._find_col(
+                headers, ["описание", "description", "name", "стока", "наименование"]
+            ) or 1
+            ean_idx = ProductDatabase._find_col(
+                headers, ["ean", "баркод", "barcode", "gtin", "upc"]
+            )
+
+            col_code = df.columns[code_idx]
+            col_desc = df.columns[desc_idx]
+            col_ean  = df.columns[ean_idx] if ean_idx is not None else None
+            logger.info("WunderBaum — code:%s  desc:%s  ean:%s", col_code, col_desc, col_ean)
+
+            for _, row in df.iterrows():
+                code = ProductDatabase._clean_val(str(row[col_code]).strip())
+                desc = str(row[col_desc]).strip()
+                ean  = ProductDatabase._clean_val(str(row[col_ean]).strip()) if col_ean is not None else ""
+
+                if not code or code.lower() in ("nan", ""):
+                    continue
+                if re.match(r'^\d+\.0$', code):
+                    code = code[:-2]
+
+                info = ProductInfo(
+                    internal_code=code,
+                    description=desc or None,
+                    ean=ean or None,
+                )
+                # Index by raw code; also by WB-prefixed form (if not already prefixed)
+                self._by_code[code.upper()] = info
+                if not code.upper().startswith("WB-"):
+                    self._by_code[f"WB-{code}".upper()] = info
+
+                if ean and re.match(r'^\d{8,14}$', ean):
+                    self._by_ean[ean] = info
+
+            logger.info("WunderBaum DB loaded: %d code entries, %d EAN entries",
+                        len(self._by_code), len(self._by_ean))
+        except Exception as e:
+            logger.error("Failed to load WunderBaum DB: %s", e)
+        self._loaded = True
+
+    def lookup(self, code: str) -> Optional[ProductInfo]:
+        if not code or not self._loaded:
+            return None
+        key = code.strip().upper()
+        info = self._by_code.get(key)
+        if info:
+            return info
+        # EAN lookup (13-digit numeric code from invoice Код column)
+        ean_clean = re.sub(r'[^0-9]', '', code)
+        if re.match(r'^\d{8,14}$', ean_clean):
+            return self._by_ean.get(ean_clean)
+        return None
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded and (bool(self._by_code) or bool(self._by_ean))
+
+
+_wb_db: Optional[WunderBaumDatabase] = None
+
+
+def get_wunder_baum_db(data_dir: str) -> WunderBaumDatabase:
+    global _wb_db
+    if _wb_db is None:
+        _wb_db = WunderBaumDatabase(data_dir)
+        _wb_db.load()
+    return _wb_db
