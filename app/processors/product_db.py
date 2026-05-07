@@ -853,6 +853,12 @@ class WunderBaumDatabase:
                     continue
                 if re.match(r'^\d+\.0$', code):
                     code = code[:-2]
+                # Strip any invisible characters from numeric codes (e.g. Text-formatted
+                # cells in Excel may carry hidden markers); mirrors how the invoice parser
+                # normalises codes with re.sub(r'[^0-9]', '', ean_raw).
+                digits_only = re.sub(r'[^0-9]', '', code)
+                if re.match(r'^\d{4,14}$', digits_only) and digits_only != code:
+                    code = digits_only
 
                 info = ProductInfo(
                     internal_code=code,
