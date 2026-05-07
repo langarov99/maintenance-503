@@ -5351,11 +5351,23 @@ def _parse_bardahl_table(table: list[list]) -> list[ProductRecord]:
 
 def extract_bardahl_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Bardahl: %d table(s) received", len(tables))
-    records = []
+    raw: list[ProductRecord] = []
     for table in tables:
-        records.extend(_parse_bardahl_table(table))
+        raw.extend(_parse_bardahl_table(table))
+
+    # PDF may contain original + copy of the invoice; keep the record with the
+    # most data (price > no-price) for each code.
+    seen: dict[str, ProductRecord] = {}
+    for rec in raw:
+        code = rec.product_code
+        if code not in seen:
+            seen[code] = rec
+        elif rec.filled_count() > seen[code].filled_count():
+            seen[code] = rec
+
+    records = list(seen.values())
     if records:
-        logger.info("Bardahl: %d records from tables", len(records))
+        logger.info("Bardahl: %d records from tables (after dedup)", len(records))
     return records
 
 
