@@ -5322,16 +5322,18 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
         def cell(idx):
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
 
-        # EAN: clean all whitespace/linebreaks, then check for 8-14 digit sequence
+        # Код: EAN баркод (13 цифри) или вътрешен код (≥4 цифри, напр. 8000, 8028)
         ean_raw = re.sub(r'\s+', '', cell(kod_idx)) if kod_idx is not None else ""
         ean_clean = re.sub(r'[^0-9]', '', ean_raw)
-        if not re.match(r'^\d{8,14}$', ean_clean):
+        if not re.match(r'^\d{4,14}$', ean_clean):
             continue  # header or totals row
 
         name_raw = cell(name_idx) if name_idx is not None else ""
 
+        # Use EAN field only for proper barcodes (≥8 digits)
         code = ean_clean
         name = name_raw
+        is_ean = len(ean_clean) >= 8
 
         qty_raw   = cell(qty_idx)
         price_val = _wb_num(cell(price_idx))
@@ -5340,7 +5342,7 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
         rec.product_name = name or None
-        rec.ean          = ean_clean
+        rec.ean          = ean_clean if is_ean else None
         if qty_raw:
             rec.quantity = qty_raw
         if price_val:
