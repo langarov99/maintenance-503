@@ -5279,6 +5279,23 @@ def _wb_num(s: str) -> str | None:
         return None
 
 
+def _wb_pua_decode(s: str) -> str:
+    """Shift PUA characters (U+F000–U+F0FF) back to ASCII."""
+    return ''.join(
+        chr(ord(c) - 0xF000) if 0xF000 <= ord(c) <= 0xF0FF else c
+        for c in (s or "")
+    )
+
+
+def _wb_is_pua(table: list[list]) -> bool:
+    """Return True if the table cells are PUA-encoded (custom embedded font)."""
+    for row in table[:3]:
+        for cell in row:
+            if any(0xF000 <= ord(c) <= 0xF0FF for c in str(cell or "")):
+                return True
+    return False
+
+
 def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
     if not table:
         return []
@@ -5286,33 +5303,45 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
     for i, row in enumerate(table[:5]):
         logger.info("WB table row[%d]: %s", i, [str(c or "")[:40] for c in row])
 
-    # Find header row (contains Код, Стока, Кол.)
-    header_idx = None
-    kod_idx = name_idx = qty_idx = price_idx = total_idx = None
+    # PUA-encoded font: decode all cells and use fixed column positions
+    # Standard Wunder-Baum layout (8 cols): №|Код|Стока|Мярка|Кол.|Цена|ДДС%|Стойност
+    if _wb_is_pua(table):
+        logger.info("WB: PUA-encoded font detected — applying decode + fixed column mapping")
+        table = [[_wb_pua_decode(str(c or "")) for c in row] for row in table]
+        ncols = len(table[0]) if table else 0
+        if ncols != 8:
+            logger.warning("WB PUA: unexpected column count %d", ncols)
+            return []
+        header_idx = 0
+        kod_idx, name_idx, qty_idx, price_idx, total_idx = 1, 2, 4, 5, 7
+    else:
+        # Find header row by keyword (normal font)
+        header_idx = None
+        kod_idx = name_idx = qty_idx = price_idx = total_idx = None
 
-    for i, row in enumerate(table):
-        joined = " ".join(str(c or "").lower() for c in row)
-        if re.search(r'\bкод\b', joined) and re.search(r'\bстока\b|\bкол\b', joined):
-            header_idx = i
-            headers = [str(c or "").lower().strip() for c in row]
+        for i, row in enumerate(table):
+            joined = " ".join(str(c or "").lower() for c in row)
+            if re.search(r'\bкод\b', joined) and re.search(r'\bстока\b|\bкол\b', joined):
+                header_idx = i
+                headers = [str(c or "").lower().strip() for c in row]
 
-            def _find(kws):
-                for kw in kws:
-                    for j, h in enumerate(headers):
-                        if kw in h:
-                            return j
-                return None
+                def _find(kws):
+                    for kw in kws:
+                        for j, h in enumerate(headers):
+                            if kw in h:
+                                return j
+                    return None
 
-            kod_idx   = _find(["код"])
-            name_idx  = _find(["стока", "описание", "наименование"])
-            qty_idx   = _find(["кол", "qty", "количество"])
-            price_idx = _find(["цена", "price"])
-            total_idx = _find(["стойност", "ст-ст", "total", "сумма"])
-            break
+                kod_idx   = _find(["код"])
+                name_idx  = _find(["стока", "описание", "наименование"])
+                qty_idx   = _find(["кол", "qty", "количество"])
+                price_idx = _find(["цена", "price"])
+                total_idx = _find(["стойност", "ст-ст", "total", "сумма"])
+                break
 
-    if header_idx is None:
-        logger.warning("WB: no header row found in table (%d rows)", len(table))
-        return []
+        if header_idx is None:
+            logger.warning("WB: no header row found in table (%d rows)", len(table))
+            return []
 
     logger.info("WB header at row %d: kod=%s name=%s qty=%s price=%s total=%s",
                 header_idx, kod_idx, name_idx, qty_idx, price_idx, total_idx)
