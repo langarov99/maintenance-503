@@ -1029,9 +1029,10 @@ def _is_maxton_document(text: str) -> bool:
     return bool(re.search(r'maxton', text, re.IGNORECASE))
 
 
-_MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
+_MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
 # No-anchor variant for text scanning; includes '+' for compound codes like FD1G+FD1RG
-_MAXTON_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}-[A-Z0-9][A-Z0-9\-\+]{3,})')
+# Prefix allows 2+ uppercase/digit chars before the first dash (e.g. KICE3FPROGTCNC-FD1B+FSF1G)
+_MAXTON_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-\+]{3,})')
 
 
 def _strip_diacritics(s: str) -> str:
@@ -1145,11 +1146,53 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+_MAXTON_SHIPPING_RE = re.compile(
+    r'(?<!\w)(?:shipping|wysyłka|wysylka|wyslka|freight)(?!\w)', re.IGNORECASE
+)
+
+
+def _split_merged_maxton_lines(lines: list[str]) -> list[str]:
+    """Split lines where PDF extraction merged two product rows together.
+
+    Splits at:
+    - Subsequent Maxton codes when the preceding segment already has qty data
+    - Shipping/freight keywords that appear after qty data
+    """
+    out: list[str] = []
+    for line in lines:
+        # Collect candidate split positions: embedded Maxton codes + shipping keywords
+        split_points = [0]
+
+        code_matches = list(_MAXTON_CODE_TEXT_RE.finditer(line))
+        for match in code_matches[1:]:
+            segment_before = line[split_points[-1]:match.start()]
+            if re.search(r'\b\d{1,4}\s*(?:szt|kpl)', segment_before, re.IGNORECASE):
+                split_points.append(match.start())
+
+        ship_match = _MAXTON_SHIPPING_RE.search(line)
+        if ship_match:
+            segment_before = line[split_points[-1]:ship_match.start()]
+            if re.search(r'\b\d{1,4}\s*(?:szt|kpl)', segment_before, re.IGNORECASE):
+                split_points.append(ship_match.start())
+
+        split_points.append(len(line))
+        split_points = sorted(set(split_points))
+
+        if len(split_points) == 2:
+            out.append(line)
+        else:
+            for k in range(len(split_points) - 1):
+                seg = line[split_points[k]:split_points[k + 1]].strip()
+                if seg:
+                    out.append(seg)
+    return out
+
+
 def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
     """Text-based fallback when pdfplumber finds no usable tables."""
     records: list[ProductRecord] = []
     seen: dict[str, int] = {}  # code → index in records (for duplicate merging)
-    lines = text.splitlines()
+    lines = _split_merged_maxton_lines(text.splitlines())
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -1184,6 +1227,10 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             if not nl:
                 j += 1  # blank line — keep scanning, don't break
                 continue
+            # Stop at shipping/freight rows so their prices don't bleed into
+            # the preceding product's price extraction.
+            if re.search(r'\b(?:shipping|wysyłka|wyslka|freight)\b', nl, re.IGNORECASE):
+                break
             mm = _MAXTON_CODE_TEXT_RE.search(nl)
             if mm:
                 nl_prefix = nl[:mm.start()].strip()
