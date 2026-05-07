@@ -5271,9 +5271,6 @@ def _is_wunder_baum_document(text: str) -> bool:
     return bool(re.search(r'wunder.?baum', text, re.IGNORECASE))
 
 
-_WB_ARTICLE_RE = re.compile(r'-(\d{7,9})\s*$')
-
-
 def _wb_num(s: str) -> str | None:
     s = (s or "").strip().replace(' ', '').replace(',', '.')
     try:
@@ -5333,15 +5330,8 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
 
         name_raw = cell(name_idx) if name_idx is not None else ""
 
-        # Extract Wunder-Baum article number from end of description (e.g. "-40048914")
-        article = None
+        code = ean_clean
         name = name_raw
-        am = _WB_ARTICLE_RE.search(name_raw)
-        if am:
-            article = am.group(1)
-            name = name_raw[:am.start()].rstrip(" -").strip()
-
-        code = article if article else ean_clean
 
         qty_raw   = cell(qty_idx)
         price_val = _wb_num(cell(price_idx))
