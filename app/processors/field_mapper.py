@@ -5363,6 +5363,9 @@ def extract_wunder_baum_products(tables: list, text: str = "") -> list[ProductRe
     if records:
         logger.info("Wunder-Baum: %d records from tables", len(records))
     return records
+
+
+class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
 
