@@ -894,3 +894,14 @@ def get_wunder_baum_db(data_dir: str) -> WunderBaumDatabase:
         _wb_db = WunderBaumDatabase(data_dir)
         _wb_db.load()
     return _wb_db
+
+
+_wb_code_map: Optional[SupplierCodeMapping] = None
+
+
+def get_wunder_baum_code_map(data_dir: str) -> SupplierCodeMapping:
+    global _wb_code_map
+    if _wb_code_map is None:
+        _wb_code_map = SupplierCodeMapping(data_dir, "wunder-baum-code-map.xlsx")
+        _wb_code_map.load()
+    return _wb_code_map
