@@ -856,10 +856,7 @@ class WunderBaumDatabase:
                     description=desc or None,
                     ean=ean or None,
                 )
-                # Index by raw code; also by WB-prefixed form (if not already prefixed)
                 self._by_code[code.upper()] = info
-                if not code.upper().startswith("WB-"):
-                    self._by_code[f"WB-{code}".upper()] = info
 
                 if ean and re.match(r'^\d{8,14}$', ean):
                     self._by_ean[ean] = info

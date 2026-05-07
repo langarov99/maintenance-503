@@ -5341,7 +5341,7 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
             article = am.group(1)
             name = name_raw[:am.start()].rstrip(" -").strip()
 
-        code = f"WB-{article}" if article else ean_clean
+        code = article if article else ean_clean
 
         qty_raw   = cell(qty_idx)
         price_val = _wb_num(cell(price_idx))
