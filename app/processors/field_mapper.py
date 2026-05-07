@@ -5324,16 +5324,12 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
 
         # Код: EAN баркод (13 цифри) или вътрешен код (≥4 цифри, напр. 8000, 8028)
         ean_raw = re.sub(r'\s+', '', cell(kod_idx)) if kod_idx is not None else ""
-        ean_clean = re.sub(r'[^0-9]', '', ean_raw)
-        if not re.match(r'^\d{4,14}$', ean_clean):
+        code = re.sub(r'[^0-9]', '', ean_raw)
+        if not re.match(r'^\d{4,14}$', code):
             continue  # header or totals row
 
         name_raw = cell(name_idx) if name_idx is not None else ""
-
-        # Use EAN field only for proper barcodes (≥8 digits)
-        code = ean_clean
         name = name_raw
-        is_ean = len(ean_clean) >= 8
 
         qty_raw   = cell(qty_idx)
         price_val = _wb_num(cell(price_idx))
@@ -5342,7 +5338,6 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
         rec.product_name = name or None
-        rec.ean          = ean_clean if is_ean else None
         if qty_raw:
             rec.quantity = qty_raw
         if price_val:
@@ -5351,8 +5346,8 @@ def _parse_wunder_baum_table(table: list[list]) -> list[ProductRecord]:
             rec.total_price = total_val + " лв."
 
         records.append(rec)
-        logger.info("WB: code=%s ean=%s qty=%s price=%s total=%s | %s",
-                    code, ean_clean, qty_raw, price_val, total_val, (name or "")[:50])
+        logger.info("WB: code=%s qty=%s price=%s total=%s | %s",
+                    code, qty_raw, price_val, total_val, (name or "")[:50])
 
     return records
 
@@ -5396,7 +5391,6 @@ def _parse_wunder_baum_from_text(text: str, seen_eans: set[str]) -> list[Product
         rec = ProductRecord(extraction_method="table")
         rec.product_code = ean
         rec.product_name = name
-        rec.ean          = ean
         if qty_val:
             rec.quantity = qty_val
         if price_val:
