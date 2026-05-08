@@ -5307,6 +5307,8 @@ def _parse_bardahl_table(table: list[list]) -> list[ProductRecord]:
             name_idx  = _find(["наименование", "стока"])
             qty_idx   = _find(["к-во", "кол", "qty"])
             price_idx = _find(["ед. цена", "ед.цена", "цена"])
+            disc_idx  = _find(["отстъпка", "отст", "disc"])
+            net_idx   = _find(["нето", "с отст", "нет цена", "крайна"])
             total_idx = _find(["стойност", "total"])
             break
 
@@ -5314,8 +5316,9 @@ def _parse_bardahl_table(table: list[list]) -> list[ProductRecord]:
         logger.warning("Bardahl: no header row found in table (%d rows)", len(table))
         return []
 
-    logger.info("Bardahl header at row %d: kod=%s name=%s qty=%s price=%s total=%s",
-                header_idx, kod_idx, name_idx, qty_idx, price_idx, total_idx)
+    logger.info("Bardahl headers: %s", list(enumerate(headers)))
+    logger.info("Bardahl header at row %d: kod=%s name=%s qty=%s price=%s disc=%s net=%s total=%s",
+                header_idx, kod_idx, name_idx, qty_idx, price_idx, disc_idx, net_idx, total_idx)
 
     records = []
     for row in table[header_idx + 1:]:
@@ -5334,17 +5337,42 @@ def _parse_bardahl_table(table: list[list]) -> list[ProductRecord]:
         if qty_raw:
             rec.quantity = qty_raw
 
-        price_val = _bardahl_num(cell(price_idx))
-        if price_val:
-            rec.price = price_val + " лв."
+        list_price = _bardahl_num(cell(price_idx))
+        net_price  = _bardahl_num(cell(net_idx))  if net_idx  is not None else None
+        disc_raw   = _bardahl_num(cell(disc_idx)) if disc_idx is not None else None
+        total_val  = _bardahl_num(cell(total_idx))
 
-        total_val = _bardahl_num(cell(total_idx))
+        # Determine the actual (after-discount) unit price
+        if net_price:
+            final_price = net_price
+        elif list_price and disc_raw:
+            try:
+                final_price = f"{float(list_price) * (1 - float(disc_raw) / 100):.2f}"
+            except (ValueError, ZeroDivisionError):
+                final_price = list_price
+        elif total_val and qty_raw:
+            # Fallback: derive from total ÷ qty (works even if discount column name is unknown)
+            try:
+                qty_f = float(qty_raw.replace(',', '.').replace('\xa0', '').replace(' ', ''))
+                computed = float(total_val) / qty_f if qty_f else None
+                if computed and (list_price is None or abs(computed - float(list_price)) > 0.005):
+                    final_price = f"{computed:.2f}"
+                else:
+                    final_price = list_price
+            except (ValueError, ZeroDivisionError):
+                final_price = list_price
+        else:
+            final_price = list_price
+
+        if final_price:
+            rec.price = final_price + " лв."
         if total_val:
             rec.total_price = total_val + " лв."
 
         records.append(rec)
-        logger.info("Bardahl: code=%s qty=%s price=%s total=%s | %s",
-                    code, qty_raw, price_val, total_val, (rec.product_name or "")[:50])
+        logger.info("Bardahl: code=%s qty=%s list=%s disc=%s net=%s total=%s | %s",
+                    code, qty_raw, list_price, disc_raw, final_price, total_val,
+                    (rec.product_name or "")[:50])
 
     return records
 
