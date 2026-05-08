@@ -4697,17 +4697,19 @@ def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
             raw = item_text[:code_m.start()].strip()
             name = re.sub(r'\s+', ' ', raw)[:120] or None
 
-        # Fixed column layout: [0]=No, [1]=Item, [2]=Custom(ignore), [3]=Unit, [4]=Qty, [5]=UnitPrice, [6]=Total
-        def cell(idx):
-            if idx >= len(row):
-                return ""
-            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+        # Scan from right to collect total, price, qty.
+        # Works for both the 7-col PDF layout and the wide (30-col) Excel export.
+        numerics: list[str] = []
+        for c in reversed(row):
+            v = re.sub(r'\s+', ' ', str(c or '')).strip()
+            if v and _kegel_num(v) is not None:
+                numerics.append(v)
+                if len(numerics) == 3:
+                    break
 
-        logger.info("Kegel row (%d cols): %s", len(row), [cell(i) for i in range(len(row))])
-
-        qty       = cell(4) or None
-        price_str = _kegel_num(cell(5))
-        total_str = _kegel_num(cell(6))
+        total_str = numerics[0] if len(numerics) >= 1 else None
+        price_str = numerics[1] if len(numerics) >= 2 else None
+        qty       = numerics[2] if len(numerics) >= 3 else None
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
