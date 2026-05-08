@@ -4703,6 +4703,8 @@ def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
                 return ""
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
 
+        logger.info("Kegel row (%d cols): %s", len(row), [cell(i) for i in range(len(row))])
+
         qty       = cell(4) or None
         price_str = _kegel_num(cell(5))
         total_str = _kegel_num(cell(6))
