@@ -397,6 +397,11 @@ async def extract(
                     if not rec.product_code:
                         continue
                     nospace = _re.sub(r'\s+', '', rec.product_code.upper())
+                    if nospace not in _desc_to_code:
+                        # Try prefix match for descriptions truncated by a line break in the PDF
+                        prefix_hits = [k for k in _desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
+                        if len(prefix_hits) == 1:
+                            nospace = prefix_hits[0]
                     if nospace in _desc_to_code:
                         rec.product_code = _desc_to_code[nospace]
                         mapped_n += 1
@@ -405,13 +410,6 @@ async def extract(
                 logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
-                    # Diagnostic: show code-map keys near each unmapped entry
-                    for u in unmapped[:6]:
-                        u_ns = _re.sub(r'\s+', '', u.upper())
-                        near = [k for k in _desc_to_code if k[:10] == u_ns[:10]]
-                        logger.info("  unmapped=%s | near keys: %s | codepoints: %s",
-                                    u_ns, near[:3],
-                                    [hex(ord(c)) for c in u_ns[:8]])
 
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
