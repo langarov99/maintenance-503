@@ -405,6 +405,13 @@ async def extract(
                 logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
+                    # Diagnostic: show code-map keys near each unmapped entry
+                    for u in unmapped[:6]:
+                        u_ns = _re.sub(r'\s+', '', u.upper())
+                        near = [k for k in _desc_to_code if k[:10] == u_ns[:10]]
+                        logger.info("  unmapped=%s | near keys: %s | codepoints: %s",
+                                    u_ns, near[:3],
+                                    [hex(ord(c)) for c in u_ns[:8]])
 
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
