@@ -5287,7 +5287,13 @@ def _areon_num(s: str) -> str | None:
 # Matches a product row in extracted text:
 # <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR
 _AREON_ROW_RE = re.compile(
-    r'(\d+)\s+([А-ЯA-Z][^\d\n]{3,}?)\s+(\d+(?:[.,]\d+)?)\s*БР\s+([\d,.]+)\s+EUR\s+\d+(?:[.,]\d+)?\s*БР\s+([\d,.]+)\s+EUR',
+    # qty has NO space before БР ("10БР"); per DOES have space ("1 БР") — use this to split
+    r'(\d+)\s+'           # position number
+    r'([А-ЯA-Z][^\n]*?)'  # description (lazy, no newlines)
+    r'\s+(\d+)БР\s+'      # qty immediately followed by БР
+    r'([\d,.]+)\s+EUR\s+' # unit price
+    r'\d+\s+БР\s+'        # per (ignored)
+    r'([\d,.]+)\s+EUR',   # total
     re.IGNORECASE,
 )
 
@@ -5388,6 +5394,11 @@ def extract_areon_products(tables: list, text: str = "") -> list[ProductRecord]:
     raw: list[ProductRecord] = []
     for table in tables:
         raw.extend(_parse_areon_table(table))
+
+    # If table gave only merged-cell junk (product_code > 100 chars), discard and use text
+    if raw and all(len(rec.product_code) > 100 for rec in raw):
+        logger.warning("Areon: table results look like merged cells, switching to text fallback")
+        raw = []
 
     if not raw:
         logger.info("Areon: table extraction yielded nothing, trying text fallback")

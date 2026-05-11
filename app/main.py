@@ -378,20 +378,30 @@ async def extract(
             if unmapped:
                 logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
 
-        # Areon: translate invoice description → internal code via code map
+        # Areon: translate invoice description → internal code via code map.
+        # The code-map file has columns AREON (descriptions) and AUTOPRO (our codes).
+        # SupplierCodeMapping auto-detects them reversed, so _map = {our_code: description}.
+        # We build a reverse no-spaces lookup to handle the PDF's merged-word descriptions.
         if supplier == "areon":
+            import re as _re
             areon_map = get_areon_code_map(str(DATA_DIR))
             if areon_map.is_loaded:
+                # Build: normalized_description_nospaces → our_code
+                _desc_to_code: dict[str, str] = {}
+                for our_code_val, desc_val in areon_map._map.items():
+                    nospace = _re.sub(r'\s+', '', str(desc_val).upper())
+                    _desc_to_code[nospace] = our_code_val
+
                 mapped_n, unmapped = 0, []
                 for rec in records:
                     if not rec.product_code:
                         continue
-                    mapped = areon_map.translate(rec.product_code)
-                    if mapped:
-                        rec.product_code = mapped
+                    nospace = _re.sub(r'\s+', '', rec.product_code.upper())
+                    if nospace in _desc_to_code:
+                        rec.product_code = _desc_to_code[nospace]
                         mapped_n += 1
                     else:
-                        unmapped.append(rec.product_code)
+                        unmapped.append(rec.product_code[:50])
                 logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
