@@ -428,13 +428,13 @@ async def extract(
                     for _code, _desc in areon_map._map.items():
                         _desc_to_code[_areon_norm(str(_desc))] = _code
 
+            if _desc_to_code:
                 mapped_n, unmapped = 0, []
                 for rec in records:
                     if not rec.product_code:
                         continue
                     nospace = _areon_norm(rec.product_code)
                     if nospace not in _desc_to_code:
-                        # Try prefix match for descriptions truncated by a line break in the PDF
                         prefix_hits = [k for k in _desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
                         if len(prefix_hits) == 1:
                             nospace = prefix_hits[0]
