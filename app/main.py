@@ -384,19 +384,31 @@ async def extract(
         # We build a reverse no-spaces lookup to handle the PDF's merged-word descriptions.
         if supplier == "areon":
             import re as _re
+            # Normalize Latin look-alike characters → Cyrillic so that
+            # e.g. Latin K-E-N (typed in Excel) matches Cyrillic К-Е-Н (from PDF).
+            _LAT_TO_CYR = {
+                ord('A'): 'А', ord('B'): 'В', ord('C'): 'С', ord('E'): 'Е',
+                ord('H'): 'Н', ord('K'): 'К', ord('M'): 'М', ord('O'): 'О',
+                ord('P'): 'Р', ord('T'): 'Т', ord('X'): 'Х',
+                ord('a'): 'а', ord('c'): 'с', ord('e'): 'е', ord('o'): 'о',
+                ord('p'): 'р', ord('x'): 'х',
+            }
+
+            def _areon_norm(s: str) -> str:
+                return _re.sub(r'\s+', '', s.upper().translate(_LAT_TO_CYR))
+
             areon_map = get_areon_code_map(str(DATA_DIR))
             if areon_map.is_loaded:
                 # Build: normalized_description_nospaces → our_code
                 _desc_to_code: dict[str, str] = {}
                 for our_code_val, desc_val in areon_map._map.items():
-                    nospace = _re.sub(r'\s+', '', str(desc_val).upper())
-                    _desc_to_code[nospace] = our_code_val
+                    _desc_to_code[_areon_norm(str(desc_val))] = our_code_val
 
                 mapped_n, unmapped = 0, []
                 for rec in records:
                     if not rec.product_code:
                         continue
-                    nospace = _re.sub(r'\s+', '', rec.product_code.upper())
+                    nospace = _areon_norm(rec.product_code)
                     if nospace not in _desc_to_code:
                         # Try prefix match for descriptions truncated by a line break in the PDF
                         prefix_hits = [k for k in _desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
