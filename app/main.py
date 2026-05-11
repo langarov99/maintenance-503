@@ -422,15 +422,12 @@ async def extract(
                 logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
-                    for u in unmapped[:3]:
-                        norm_u = _areon_norm(u)
-                        codepoints = ' '.join(f'U+{ord(c):04X}' for c in norm_u)
-                        logger.info("Areon debug extracted norm=%r codepoints: %s", norm_u, codepoints)
-                        for map_key, map_val in areon_map._map.items():
-                            norm_v = _areon_norm(str(map_val))
-                            if 'ДЪВ' in norm_v and 'КЕН' in norm_v or 'КЕH' in norm_v:
-                                cp_v = ' '.join(f'U+{ord(c):04X}' for c in norm_v)
-                                logger.info("Areon debug map key=%r val=%r norm=%r codepoints: %s", map_key, map_val, norm_v, cp_v)
+                    # Dump all code-map entries whose normalized description contains КЕН
+                    logger.info("Areon code-map entries containing КЕН:")
+                    for map_key, map_val in sorted(areon_map._map.items()):
+                        norm_v = _areon_norm(str(map_val))
+                        if 'КЕН' in norm_v:
+                            logger.info("  key=%r  val=%r  norm=%r", map_key, map_val, norm_v)
 
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
