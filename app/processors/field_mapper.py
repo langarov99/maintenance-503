@@ -5267,6 +5267,145 @@ def extract_bmw_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Areon (distributor: Ареон България ЕООД)
+# ---------------------------------------------------------------------------
+
+def _is_areon_document(text: str) -> bool:
+    return bool(re.search(r'ареон\s+българия|areon\s+car\s+perfume', text, re.IGNORECASE))
+
+
+def _areon_num(s: str) -> str | None:
+    m = re.search(r'\d+[.,]\d+|\d+', (s or "").replace('\xa0', '').replace(' ', ''))
+    if m:
+        try:
+            return f"{float(m.group().replace(',', '.')):.2f}"
+        except ValueError:
+            return None
+    return None
+
+
+# Matches a product row in extracted text:
+# <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR
+_AREON_ROW_RE = re.compile(
+    r'(\d+)\s+([А-ЯA-Z][^\d\n]{3,}?)\s+(\d+(?:[.,]\d+)?)\s*БР\s+([\d,.]+)\s+EUR\s+\d+(?:[.,]\d+)?\s*БР\s+([\d,.]+)\s+EUR',
+    re.IGNORECASE,
+)
+
+
+def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = poz_idx = desc_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if re.search(r'поз|poz', joined) and re.search(r'описание|description', joined):
+            header_idx = i
+            headers = [str(c or "").lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            poz_idx   = _find(["поз", "poz", "no.", "№"])
+            desc_idx  = _find(["описание", "description", "артикул"])
+            qty_idx   = _find(["кол", "qty"])
+            price_idx = _find(["цена", "price"])
+            total_idx = _find(["стойност", "total", "amount"])
+            break
+
+    if header_idx is None:
+        return []
+
+    logger.info("Areon table header at row %d: poz=%s desc=%s qty=%s price=%s total=%s",
+                header_idx, poz_idx, desc_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
+
+        desc = cell(desc_idx)
+        if not desc or re.search(r'общо|total|словом|данък|ддс|vat|получател', desc.lower()):
+            continue
+
+        qty_raw   = cell(qty_idx)
+        qty_clean = re.sub(r'\s*[A-ZА-Яa-zа-я]+\.?\s*$', '', qty_raw).strip()
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = re.sub(r'\s+', ' ', desc).upper()
+        if qty_clean:
+            rec.quantity = qty_clean
+        pv = _areon_num(cell(price_idx))
+        if pv:
+            rec.price = pv + " EUR"
+        tv = _areon_num(cell(total_idx))
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Areon table: desc=%s qty=%s price=%s total=%s", desc[:50], qty_clean, pv, tv)
+
+    return records
+
+
+def _parse_areon_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback when pdfplumber cannot split Areon table columns."""
+    records = []
+    logger.info("Areon text fallback — first 500 chars:\n%s", repr(text[:500]))
+
+    for m in _AREON_ROW_RE.finditer(text):
+        poz, desc, qty_raw, price_raw, total_raw = m.groups()
+        desc = re.sub(r'\s+', ' ', desc).strip().upper()
+        if re.search(r'общо|total|словом|ддс|vat', desc.lower()):
+            continue
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = desc
+        qty_clean = re.sub(r'[^0-9.,]', '', qty_raw).strip()
+        if qty_clean:
+            rec.quantity = qty_clean
+        pv = _areon_num(price_raw)
+        if pv:
+            rec.price = pv + " EUR"
+        tv = _areon_num(total_raw)
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Areon text: poz=%s desc=%s qty=%s price=%s total=%s",
+                    poz, desc[:50], qty_clean, pv, tv)
+
+    return records
+
+
+def extract_areon_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Areon: %d table(s) received", len(tables))
+    raw: list[ProductRecord] = []
+    for table in tables:
+        raw.extend(_parse_areon_table(table))
+
+    if not raw:
+        logger.info("Areon: table extraction yielded nothing, trying text fallback")
+        raw = _parse_areon_text(text)
+
+    seen: dict[str, ProductRecord] = {}
+    for rec in raw:
+        code = rec.product_code
+        if code not in seen or rec.filled_count() > seen[code].filled_count():
+            seen[code] = rec
+
+    records = list(seen.values())
+    if records:
+        logger.info("Areon: %d records (after dedup)", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Bardahl (distributor: ДНВ Проспийт ЕООД / ProSpeed)
 # Bulgarian invoice columns: No, Код (BAR-XXXX), Наименование, К-во, Мярка, Ед. цена, ТО%, Стойност
@@ -5822,6 +5961,14 @@ class FieldMapper:
             records = extract_wunder_baum_products(tables, text)
             if records:
                 logger.info("Extraction method: Wunder-Baum (%d records)", len(records))
+                return records
+
+        # Step 0z — Areon (explicit selection or auto-detection)
+        if supplier == "areon" or (supplier == "auto" and _is_areon_document(text)):
+            _specific_tried = True
+            records = extract_areon_products(tables, text)
+            if records:
+                logger.info("Extraction method: Areon (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

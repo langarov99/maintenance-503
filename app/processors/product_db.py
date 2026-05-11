@@ -924,3 +924,25 @@ def get_wunder_baum_code_map(data_dir: str) -> SupplierCodeMapping:
         _wb_code_map = SupplierCodeMapping(data_dir, "wunder-baum-code-map.xlsx")
         _wb_code_map.load()
     return _wb_code_map
+
+
+_areon_db: Optional[SupplierNameDatabase] = None
+
+
+def get_areon_db(data_dir: str) -> SupplierNameDatabase:
+    global _areon_db
+    if _areon_db is None:
+        _areon_db = SupplierNameDatabase(data_dir, "areon-products.xlsx")
+        _areon_db.load()
+    return _areon_db
+
+
+_areon_code_map: Optional[SupplierCodeMapping] = None
+
+
+def get_areon_code_map(data_dir: str) -> SupplierCodeMapping:
+    global _areon_code_map
+    if _areon_code_map is None:
+        _areon_code_map = SupplierCodeMapping(data_dir, "areon-code-map.xlsx")
+        _areon_code_map.load()
+    return _areon_code_map

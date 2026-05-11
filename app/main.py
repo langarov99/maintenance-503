@@ -20,7 +20,7 @@ from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
 from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document, _is_gumarny_zubri_document, _is_wunder_baum_document
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db, get_wunder_baum_db, get_wunder_baum_code_map, get_bardahl_db
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db, get_wunder_baum_db, get_wunder_baum_code_map, get_bardahl_db, get_areon_db, get_areon_code_map
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -378,6 +378,24 @@ async def extract(
             if unmapped:
                 logger.info("Farad unmapped codes: %s", ", ".join(unmapped))
 
+        # Areon: translate invoice description → internal code via code map
+        if supplier == "areon":
+            areon_map = get_areon_code_map(str(DATA_DIR))
+            if areon_map.is_loaded:
+                mapped_n, unmapped = 0, []
+                for rec in records:
+                    if not rec.product_code:
+                        continue
+                    mapped = areon_map.translate(rec.product_code)
+                    if mapped:
+                        rec.product_code = mapped
+                        mapped_n += 1
+                    else:
+                        unmapped.append(rec.product_code)
+                logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
+                if unmapped:
+                    logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
+
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
         if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(_doc_text)):
@@ -427,6 +445,7 @@ async def extract(
             "bmw":             get_bmw_db,
             "wunder_baum":     get_wunder_baum_db,
             "bardahl":         get_bardahl_db,
+            "areon":           get_areon_db,
         }
         _name_supplier = supplier
         if supplier == "auto" and _is_rigum_document(_doc_text):
