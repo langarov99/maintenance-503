@@ -407,12 +407,12 @@ async def extract(
                     _df = _pd.read_excel(_areon_map_path, engine="openpyxl", header=0, dtype=str)
                     _df = _df.fillna("")
                     _hdrs = [str(c).lower().strip() for c in _df.columns]
-                    # AUTOPRO col = descriptions (left), AREON col = our codes (right)
-                    _autopro_col = next((c for c in _df.columns if 'autopro' in str(c).lower()), _df.columns[0])
-                    _areon_col   = next((c for c in _df.columns if 'areon'   in str(c).lower()), _df.columns[1])
+                    # AREON col = invoice descriptions, AUTOPRO col = our internal codes
+                    _areon_col   = next((c for c in _df.columns if 'areon'   in str(c).lower()), _df.columns[0])
+                    _autopro_col = next((c for c in _df.columns if 'autopro' in str(c).lower()), _df.columns[1])
                     for _, _row in _df.iterrows():
-                        _desc = str(_row[_autopro_col]).strip()
-                        _code = str(_row[_areon_col]).strip()
+                        _desc = str(_row[_areon_col]).strip()
+                        _code = str(_row[_autopro_col]).strip()
                         if _desc and _code and _desc.lower() != 'nan' and _code.lower() != 'nan':
                             _desc_to_code[_areon_norm(_desc)] = _code
                     logger.info("Areon code map (direct): %d description→code pairs", len(_desc_to_code))
