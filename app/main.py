@@ -397,12 +397,36 @@ async def extract(
             def _areon_norm(s: str) -> str:
                 return _re.sub(r'\s+', '', s.upper().translate(_LAT_TO_CYR))
 
-            areon_map = get_areon_code_map(str(DATA_DIR))
-            if areon_map.is_loaded:
-                # Build: normalized_description_nospaces → our_code
-                _desc_to_code: dict[str, str] = {}
-                for our_code_val, desc_val in areon_map._map.items():
-                    _desc_to_code[_areon_norm(str(desc_val))] = our_code_val
+            # Read the Excel directly so that duplicate codes (same code, multiple
+            # descriptions) are all preserved — _map deduplicates by code and loses entries.
+            import pandas as _pd
+            _areon_map_path = DATA_DIR / "areon-code-map.xlsx"
+            _desc_to_code: dict[str, str] = {}
+            if _areon_map_path.exists():
+                try:
+                    _df = _pd.read_excel(_areon_map_path, engine="openpyxl", header=0, dtype=str)
+                    _df = _df.fillna("")
+                    _hdrs = [str(c).lower().strip() for c in _df.columns]
+                    # AUTOPRO col = descriptions (left), AREON col = our codes (right)
+                    _autopro_col = next((c for c in _df.columns if 'autopro' in str(c).lower()), _df.columns[0])
+                    _areon_col   = next((c for c in _df.columns if 'areon'   in str(c).lower()), _df.columns[1])
+                    for _, _row in _df.iterrows():
+                        _desc = str(_row[_autopro_col]).strip()
+                        _code = str(_row[_areon_col]).strip()
+                        if _desc and _code and _desc.lower() != 'nan' and _code.lower() != 'nan':
+                            _desc_to_code[_areon_norm(_desc)] = _code
+                    logger.info("Areon code map (direct): %d description→code pairs", len(_desc_to_code))
+                except Exception as _e:
+                    logger.warning("Areon direct map read failed (%s), falling back to _map", _e)
+                    areon_map = get_areon_code_map(str(DATA_DIR))
+                    if areon_map.is_loaded:
+                        for _code, _desc in areon_map._map.items():
+                            _desc_to_code[_areon_norm(str(_desc))] = _code
+            if not _desc_to_code:
+                areon_map = get_areon_code_map(str(DATA_DIR))
+                if areon_map.is_loaded:
+                    for _code, _desc in areon_map._map.items():
+                        _desc_to_code[_areon_norm(str(_desc))] = _code
 
                 mapped_n, unmapped = 0, []
                 for rec in records:
@@ -422,12 +446,6 @@ async def extract(
                 logger.info("Areon code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
-                    # Dump all code-map entries whose normalized description contains КЕН
-                    logger.info("Areon code-map entries containing КЕН:")
-                    for map_key, map_val in sorted(areon_map._map.items()):
-                        norm_v = _areon_norm(str(map_val))
-                        if 'КЕН' in norm_v:
-                            logger.info("  key=%r  val=%r  norm=%r", map_key, map_val, norm_v)
 
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
