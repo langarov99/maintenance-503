@@ -5001,7 +5001,7 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         return records
 
     qty_price_re = re.compile(
-        r'(\d+(?:[,\.]\d+)?)\s+(?:бр\.?|pcs\.?|szt\.?|set)\s+([\d,\.]+)\s+([\d,\.]+)',
+        r'(\d+(?:[,\.]\d+)?)\s+(?:бр\.?|pcs\.?|szt\.?|set)((?:\s+[\d,\.]+){2,4})',
         re.IGNORECASE,
     )
 
@@ -5020,9 +5020,18 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         pm = qty_price_re.search(after_code)
         if pm:
             name_raw = after_code[:pm.start()].strip()
-            qty       = pm.group(1)
-            price_str = _senax_num(pm.group(2))
-            total_str = _senax_num(pm.group(3))
+            qty = pm.group(1)
+            nums = [_senax_num(n) for n in pm.group(2).split()]
+            nums = [n for n in nums if n]
+            # Layout: [unit_price, total]  OR  [unit_price, disc%, final_price, total]
+            if len(nums) >= 4:
+                price_str = nums[2]   # Ед. цена с ТО (final price after discount)
+                total_str = nums[3]   # Стойност
+            elif len(nums) >= 2:
+                price_str = nums[0]
+                total_str = nums[1]
+            else:
+                price_str = total_str = None
         else:
             name_raw  = after_code
             qty = price_str = total_str = None
