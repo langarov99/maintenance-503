@@ -5374,13 +5374,26 @@ def _parse_areon_text(text: str) -> list[ProductRecord]:
     records = []
     logger.info("Areon text fallback — first 500 chars:\n%s", repr(text[:500]))
 
-    for m in _AREON_ROW_RE.finditer(text):
+    matches = list(_AREON_ROW_RE.finditer(text))
+    for i, m in enumerate(matches):
         poz, desc, qty_raw, price_raw, total_raw, desc_suffix = m.groups()
         desc = re.sub(r'\s+', ' ', desc).strip().upper()
+
+        # Same-line suffix (captured by regex group 6)
         if desc_suffix:
             suffix_clean = re.sub(r'\s+', ' ', desc_suffix).strip().upper()
             if suffix_clean:
                 desc = desc + " " + suffix_clean
+
+        # Next-line suffix: text between this match's end and the next match's start.
+        # PDF often wraps the description continuation on the line after the price.
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        between = text[m.end():next_start]
+        between_clean = re.sub(r'\s+', ' ', between).strip()
+        # Append only if it looks like a description fragment (Cyrillic present, no digits)
+        if between_clean and re.search(r'[А-ЯЁа-яё]', between_clean) and not re.search(r'\d', between_clean):
+            desc = desc + " " + between_clean.upper()
+
         if re.search(r'общо|total|словом|ддс|vat', desc.lower()):
             continue
 

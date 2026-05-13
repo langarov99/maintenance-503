@@ -435,9 +435,15 @@ async def extract(
                         continue
                     nospace = _areon_norm(rec.product_code)
                     if nospace not in _desc_to_code:
+                        # Forward: description is a prefix of a code-map key (description truncated)
                         prefix_hits = [k for k in _desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
                         if len(prefix_hits) == 1:
                             nospace = prefix_hits[0]
+                        elif not prefix_hits:
+                            # Reverse: a code-map key is a prefix of the description (extra suffix appended)
+                            rev_hits = [k for k in _desc_to_code if nospace.startswith(k)]
+                            if rev_hits:
+                                nospace = max(rev_hits, key=len)
                     if nospace in _desc_to_code:
                         rec.product_code = _desc_to_code[nospace]
                         mapped_n += 1
