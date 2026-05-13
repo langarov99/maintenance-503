@@ -5294,7 +5294,7 @@ def _areon_num(s: str) -> str | None:
 
 
 # Matches a product row in extracted text:
-# <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR
+# <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR [optional suffix]
 _AREON_ROW_RE = re.compile(
     # qty has NO space before БР ("10БР"); per DOES have space ("1 БР") — use this to split
     r'(\d+)\s+'           # position number
@@ -5302,7 +5302,8 @@ _AREON_ROW_RE = re.compile(
     r'\s+(\d+)БР\s+'      # qty immediately followed by БР
     r'([\d,.]+)\s+EUR\s+' # unit price
     r'\d+\s+БР\s+'        # per (ignored)
-    r'([\d,.]+)\s+EUR',   # total
+    r'([\d,.]+)\s+EUR'    # total
+    r'([ \t][^\n]*)?',    # optional description suffix on same line (e.g. "ЧЕР.ВАНИЛИЯ")
     re.IGNORECASE,
 )
 
@@ -5374,8 +5375,12 @@ def _parse_areon_text(text: str) -> list[ProductRecord]:
     logger.info("Areon text fallback — first 500 chars:\n%s", repr(text[:500]))
 
     for m in _AREON_ROW_RE.finditer(text):
-        poz, desc, qty_raw, price_raw, total_raw = m.groups()
+        poz, desc, qty_raw, price_raw, total_raw, desc_suffix = m.groups()
         desc = re.sub(r'\s+', ' ', desc).strip().upper()
+        if desc_suffix:
+            suffix_clean = re.sub(r'\s+', ' ', desc_suffix).strip().upper()
+            if suffix_clean:
+                desc = desc + " " + suffix_clean
         if re.search(r'общо|total|словом|ддс|vat', desc.lower()):
             continue
 
