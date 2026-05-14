@@ -5776,6 +5776,133 @@ def extract_wunder_baum_products(tables: list, text: str = "") -> list[ProductRe
     return records
 
 
+# ---------------------------------------------------------------------------
+# Slime (ITW Global Tire Repair Europe GmbH)
+# English invoice columns: Customer Part | Item | Quantity | Price | Total Amount
+# Description appears in the row immediately after each item-code row.
+# Code transformation: <item> → SLIME-<item>
+# ---------------------------------------------------------------------------
+
+def _is_slime_document(text: str) -> bool:
+    return bool(re.search(r'ITW\s+Global\s+Tire|itwgtr\.de|GLOBAL\s+TIRE\s+REPAIR', text, re.IGNORECASE))
+
+
+# Matches Slime item codes: numeric (10026), numeric-dash (10193-51),
+# alphanumeric (SDS-500/06-IN, CRK0305-IN). No spaces, at least 5 chars.
+_SLIME_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9\-/\.]{4,}$', re.IGNORECASE)
+
+
+def _slime_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+def _parse_slime_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = item_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "item" in joined and ("quantity" in joined or "price" in joined):
+            header_idx = i
+            headers = [str(c or "").lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            item_idx  = _find(["item"])
+            qty_idx   = _find(["quantity", "qty"])
+            price_idx = _find(["price"])
+            total_idx = _find(["total"])
+            break
+
+    if header_idx is None:
+        logger.warning("Slime: no header row found in table (%d rows)", len(table))
+        return []
+
+    logger.info("Slime header at row %d: item=%s qty=%s price=%s total=%s",
+                header_idx, item_idx, qty_idx, price_idx, total_idx)
+
+    def _cell(row, idx):
+        if idx is None or idx >= len(row):
+            return ""
+        return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
+
+    records = []
+    rows = table[header_idx + 1:]
+    i = 0
+    while i < len(rows):
+        row = rows[i]
+        item_val = _cell(row, item_idx)
+
+        if not item_val or not _SLIME_CODE_RE.match(item_val):
+            i += 1
+            continue
+
+        code = "SLIME-" + item_val.upper()
+        qty_raw = _cell(row, qty_idx)
+        qty_clean = re.sub(r'[^0-9.]', '', qty_raw.split()[0]).strip() if qty_raw else ""
+        pv = _slime_num(_cell(row, price_idx))
+        tv = _slime_num(_cell(row, total_idx))
+
+        # Description is in column 0 of the next row when that row has no item code
+        desc = None
+        if i + 1 < len(rows):
+            next_row = rows[i + 1]
+            next_item = _cell(next_row, item_idx)
+            if not next_item or not _SLIME_CODE_RE.match(next_item):
+                desc = _cell(next_row, 0) or None
+                i += 2
+            else:
+                i += 1
+        else:
+            i += 1
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        if desc:
+            rec.product_name = desc
+        if qty_clean:
+            rec.quantity = qty_clean
+        if pv:
+            rec.price = pv + " EUR"
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Slime: code=%s qty=%s price=%s total=%s | %s",
+                    code, qty_clean, pv, tv, (desc or "")[:50])
+
+    return records
+
+
+def extract_slime_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Slime: %d table(s) received", len(tables))
+    raw: list[ProductRecord] = []
+    for table in tables:
+        raw.extend(_parse_slime_table(table))
+
+    seen: dict[str, ProductRecord] = {}
+    for rec in raw:
+        code = rec.product_code
+        if code not in seen or rec.filled_count() > seen[code].filled_count():
+            seen[code] = rec
+
+    records = list(seen.values())
+    if records:
+        logger.info("Slime: %d records (after dedup)", len(records))
+    return records
+
+
 class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
@@ -6007,6 +6134,14 @@ class FieldMapper:
             records = extract_areon_products(tables, text)
             if records:
                 logger.info("Extraction method: Areon (%d records)", len(records))
+                return records
+
+        # Step 0z2 — Slime / ITW Global Tire Repair (explicit selection or auto-detection)
+        if supplier == "slime" or (supplier == "auto" and _is_slime_document(text)):
+            _specific_tried = True
+            records = extract_slime_products(tables, text)
+            if records:
+                logger.info("Extraction method: Slime (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

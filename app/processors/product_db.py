@@ -946,3 +946,14 @@ def get_areon_code_map(data_dir: str) -> SupplierCodeMapping:
         _areon_code_map = SupplierCodeMapping(data_dir, "areon-code-map.xlsx")
         _areon_code_map.load()
     return _areon_code_map
+
+
+_slime_db: Optional[SupplierNameDatabase] = None
+
+
+def get_slime_db(data_dir: str) -> SupplierNameDatabase:
+    global _slime_db
+    if _slime_db is None:
+        _slime_db = SupplierNameDatabase(data_dir, "slime-products.xlsx")
+        _slime_db.load()
+    return _slime_db
