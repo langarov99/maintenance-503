@@ -5791,6 +5791,16 @@ def _is_slime_document(text: str) -> bool:
 # alphanumeric (SDS-500/06-IN, CRK0305-IN). No spaces, at least 5 chars.
 _SLIME_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9\-/\.]{4,}$', re.IGNORECASE)
 
+# Matches a product line in Slime invoice text:
+# <item_code>  <qty> EA  <unit_price>  <total>
+_SLIME_ROW_TEXT_RE = re.compile(
+    r'([A-Z0-9][A-Z0-9\-/\.]{4,})'  # item code (no spaces)
+    r'\s+(\d+)\s+EA'                  # quantity followed by EA
+    r'\s+([\d,\.]+)'                  # unit price (e.g. 4,1500)
+    r'\s+([\d,\.]+)',                 # total (e.g. 249,00)
+    re.IGNORECASE,
+)
+
 
 def _slime_num(s: str) -> str | None:
     s = (s or "").strip().replace(' ', '').replace(',', '.')
@@ -5885,11 +5895,68 @@ def _parse_slime_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+def _parse_slime_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback when pdfplumber does not extract the Slime product table."""
+    records = []
+    logger.info("Slime text fallback — first 600 chars:\n%s", repr(text[:600]))
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _SLIME_ROW_TEXT_RE.search(line)
+        if m:
+            item_code, qty_raw, price_raw, total_raw = m.groups()
+            if not _SLIME_CODE_RE.match(item_code):
+                i += 1
+                continue
+            code = "SLIME-" + item_code.upper()
+            pv = _slime_num(price_raw)
+            tv = _slime_num(total_raw)
+
+            # Description: next non-empty line that doesn't start with a code
+            desc = None
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j].strip()
+                if not next_line:
+                    j += 1
+                    continue
+                first_word = next_line.split()[0] if next_line.split() else ""
+                if not _SLIME_CODE_RE.match(first_word) and not _SLIME_ROW_TEXT_RE.search(next_line):
+                    desc = next_line
+                    j += 1
+                break
+            i = j
+
+            rec = ProductRecord(extraction_method="text")
+            rec.product_code = code
+            if desc:
+                rec.product_name = desc
+            if qty_raw:
+                rec.quantity = qty_raw.strip()
+            if pv:
+                rec.price = pv + " EUR"
+            if tv:
+                rec.total_price = tv + " EUR"
+
+            records.append(rec)
+            logger.info("Slime text: code=%s qty=%s price=%s total=%s | %s",
+                        code, qty_raw, pv, tv, (desc or "")[:50])
+        else:
+            i += 1
+
+    return records
+
+
 def extract_slime_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Slime: %d table(s) received", len(tables))
     raw: list[ProductRecord] = []
     for table in tables:
         raw.extend(_parse_slime_table(table))
+
+    if not raw and text:
+        logger.info("Slime: table extraction yielded nothing, trying text fallback")
+        raw = _parse_slime_text(text)
 
     seen: dict[str, ProductRecord] = {}
     for rec in raw:
