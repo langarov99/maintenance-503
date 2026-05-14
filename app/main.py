@@ -453,18 +453,20 @@ async def extract(
                 if unmapped:
                     logger.info("Areon unmapped: %s", ", ".join(unmapped[:10]))
 
-        # Slime: enrich product name from supplier DB (products are new — is_new_product stays True)
+        # Slime: enrich product name from supplier DB; found → not new
         if supplier == "slime" or (supplier == "auto" and _is_slime_document(_doc_text)):
             slime_db = get_slime_db(str(DATA_DIR))
             if slime_db.is_loaded:
                 enriched_n = 0
                 for rec in records:
-                    if not rec.product_code or rec.product_name:
+                    if not rec.product_code:
                         continue
                     info = slime_db.lookup(rec.product_code)
-                    if info and info.description:
-                        rec.product_name = info.description
-                        enriched_n += 1
+                    if info:
+                        rec.is_new_product = False
+                        if info.description and not rec.product_name:
+                            rec.product_name = info.description
+                            enriched_n += 1
                 if enriched_n:
                     logger.info("Slime: name DB enriched %d records", enriched_n)
 
