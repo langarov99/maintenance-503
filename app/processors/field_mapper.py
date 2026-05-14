@@ -5803,7 +5803,12 @@ _SLIME_ROW_TEXT_RE = re.compile(
 
 
 def _slime_num(s: str) -> str | None:
-    s = (s or "").strip().replace(' ', '').replace(',', '.')
+    s = (s or "").strip().replace(' ', '')
+    if not s:
+        return None
+    # European format: 1.247,76 → strip dots (thousands sep), replace comma with decimal
+    if ',' in s:
+        s = s.replace('.', '').replace(',', '.')
     try:
         return f"{float(s):.2f}"
     except ValueError:
@@ -5913,7 +5918,9 @@ def _parse_slime_text(text: str) -> list[ProductRecord]:
             pv = _slime_num(price_raw)
             tv = _slime_num(total_raw)
 
-            # Description: next non-empty line that doesn't start with a code
+            # Description: next non-empty line that is NOT itself a product row.
+            # Only skip if the line contains qty+EA+price (product row); a line that
+            # merely starts with a code-like word can still be a valid description.
             desc = None
             j = i + 1
             while j < len(lines):
@@ -5921,8 +5928,7 @@ def _parse_slime_text(text: str) -> list[ProductRecord]:
                 if not next_line:
                     j += 1
                     continue
-                first_word = next_line.split()[0] if next_line.split() else ""
-                if not _SLIME_CODE_RE.match(first_word) and not _SLIME_ROW_TEXT_RE.search(next_line):
+                if not _SLIME_ROW_TEXT_RE.search(next_line):
                     desc = next_line
                     j += 1
                 break
