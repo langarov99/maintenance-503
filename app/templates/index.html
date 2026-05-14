@@ -226,6 +226,7 @@
         <div class="supplier-btn" data-supplier="rezaw_plast">Rezaw-Plast</div>
         <div class="supplier-btn" data-supplier="rigum">Rigum</div>
         <div class="supplier-btn" data-supplier="sonax">Sonax</div>
+        <div class="supplier-btn" data-supplier="slime">Slime</div>
         <div class="supplier-btn" data-supplier="team_heko">Team Heko</div>
         <div class="supplier-btn" data-supplier="tompar">ToMPaR</div>
         <div class="supplier-btn" data-supplier="bomar">Бомар България</div>
@@ -355,7 +356,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
 
   // Mark supplier buttons green (extractor implemented) or red (not yet)
-  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'areon', 'automania', 'avisa', 'bardahl', 'bmw', 'car_passion', 'farad', 'frogum', 'gelly_plast', 'geter_hosaja', 'gumarny_zubri', 'hakr', 'kegel_blazusiak', 'mafra', 'maxton_design', 'mtech', 'osram', 'petex', 'rezaw_plast', 'rigum', 'sonax', 'team_heko', 'tompar', 'vinove', 'wunder_baum']);
+  const SUPPORTED_SUPPLIERS = new Set(['amal_plast', 'amio', 'areon', 'automania', 'avisa', 'bardahl', 'bmw', 'car_passion', 'farad', 'frogum', 'gelly_plast', 'geter_hosaja', 'gumarny_zubri', 'hakr', 'kegel_blazusiak', 'mafra', 'maxton_design', 'mtech', 'osram', 'petex', 'rezaw_plast', 'rigum', 'slime', 'sonax', 'team_heko', 'tompar', 'vinove', 'wunder_baum']);
   document.querySelectorAll('.supplier-btn').forEach(btn => {
     const s = btn.dataset.supplier;
     if (SUPPORTED_SUPPLIERS.has(s)) {
