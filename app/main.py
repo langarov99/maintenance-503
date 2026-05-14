@@ -464,7 +464,7 @@ async def extract(
                     info = slime_db.lookup(rec.product_code)
                     if info:
                         rec.is_new_product = False
-                        if info.description and not rec.product_name:
+                        if info.description:
                             rec.product_name = info.description
                             enriched_n += 1
                 if enriched_n:
