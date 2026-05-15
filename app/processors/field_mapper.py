@@ -4131,7 +4131,7 @@ def extract_geyer_hosaja_products(tables: list, text: str = "") -> list[ProductR
 # ---------------------------------------------------------------------------
 
 # Line starts with: {1-3 digit pos}  {7-9 digit article}  {rest}
-_PETEX_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d{7,9})\s+(.*)', re.UNICODE)
+_PETEX_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d{7,13})\s+(.*)', re.UNICODE)
 
 
 def _is_petex_document(text: str) -> bool:
@@ -4245,6 +4245,70 @@ def _parse_petex_table(table: list[list]) -> list[ProductRecord]:
     return records
 
 
+def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
+    """Parse a single-product Petex table (new format: one table per product, no header).
+
+    Row 0: Pos | EAN-13 | Description | Menge | MEH | Preis | Rabatt | Betrag EUR
+    Row 1+: '' | internal_code | description continuation | ...
+    """
+    if not table:
+        return None
+    row0 = table[0]
+    if len(row0) < 7:
+        return None
+
+    def c(row, i):
+        return str(row[i] or "").strip() if i < len(row) else ""
+
+    pos = c(row0, 0)
+    if not re.match(r'^\d{1,3}$', pos):
+        return None
+    code = c(row0, 1)
+    if not re.match(r'^\d{7,13}$', code):
+        return None
+
+    desc_parts = [c(row0, 2)]
+    qty_raw   = c(row0, 3)
+    unit_raw  = c(row0, 4)
+    price_raw = c(row0, 5)
+    rabatt_raw= c(row0, 6) if len(row0) > 6 else ""
+    total_raw = c(row0, 7) if len(row0) > 7 else ""
+
+    for extra in table[1:]:
+        part = c(extra, 2)
+        if part:
+            desc_parts.append(part)
+
+    desc = " ".join(p for p in desc_parts if p).strip()
+
+    qty_val = None
+    try:
+        qty_val = float(qty_raw.replace(',', '.'))
+    except ValueError:
+        pass
+    quantity = _petex_qty_label(qty_val, unit_raw) if qty_val is not None else None
+
+    price = None
+    if price_raw and re.search(r'\d', price_raw):
+        pct_m = re.search(r'(\d+[,.]\d+)', rabatt_raw) if rabatt_raw else None
+        if pct_m:
+            price = _petex_net_price(price_raw, pct_m.group(1)) + ' EUR'
+        else:
+            price = price_raw.replace(',', '.') + ' EUR'
+
+    total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+
+    rec = ProductRecord(extraction_method="table")
+    rec.product_code = code
+    rec.product_name = desc[:120] if desc else None
+    rec.quantity     = quantity
+    rec.price        = price
+    rec.total_price  = total_price
+    logger.info("Petex product table: code=%s qty=%s price=%s total=%s | %s",
+                code, quantity, price, total_price, desc[:60])
+    return rec
+
+
 def _parse_petex_from_text(text: str) -> list[ProductRecord]:
     """Text fallback for Petex invoices."""
     records: list[ProductRecord] = []
@@ -4341,17 +4405,22 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
 
 def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Petex: %d table(s) received", len(tables))
-    logger.info("Petex text chars 0-800:\n%s", repr(text[:800]))
-    logger.info("Petex text chars 800-1800:\n%s", repr(text[800:1800]))
-    for ti, tbl in enumerate(tables[:6]):
-        logger.info("Petex table[%d] (%d rows): %s", ti, len(tbl),
-                    [[str(c or "")[:25] for c in row] for row in tbl[:3]])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
+
+    # Try classic parser first (old format: one big table with header + all products)
     for table in tables:
         for rec in _parse_petex_table(table):
             if rec.product_code not in seen:
+                seen.add(rec.product_code)
+                table_records.append(rec)
+
+    # New format: one table per product (each table has pos|EAN|desc|qty|unit|price|rabatt|total)
+    if not table_records:
+        for table in tables:
+            rec = _parse_petex_product_table(table)
+            if rec and rec.product_code not in seen:
                 seen.add(rec.product_code)
                 table_records.append(rec)
 
