@@ -4341,6 +4341,10 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
 
 def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Petex: %d table(s) received", len(tables))
+    logger.info("Petex text — first 800 chars:\n%s", repr(text[:800]))
+    for ti, tbl in enumerate(tables[:3]):
+        logger.info("Petex table[%d] (%d rows): %s", ti, len(tbl),
+                    [str(c or "")[:30] for c in (tbl[0] if tbl else [])])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
