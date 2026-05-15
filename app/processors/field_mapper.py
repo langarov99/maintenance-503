@@ -4132,6 +4132,8 @@ def extract_geyer_hosaja_products(tables: list, text: str = "") -> list[ProductR
 
 # Line starts with: {1-3 digit pos}  {7-9 digit article}  {rest}
 _PETEX_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d{7,13})\s+(.*)', re.UNICODE)
+# Non-EAN charge lines: pos CODE desc... e.g. "3 EWP Einwegpaletten ..."
+_PETEX_NONEAN_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z][A-Z0-9]{1,4})\s+(.*)', re.IGNORECASE)
 
 
 def _is_petex_document(text: str) -> bool:
@@ -4277,7 +4279,9 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
     if not re.match(r'^\d{1,3}$', pos):
         return None
     ean_raw = c(row0, 1)
-    if not re.match(r'^\d{7,13}$', ean_raw):
+    is_ean = bool(re.match(r'^\d{7,13}$', ean_raw))
+    is_nonean = bool(re.match(r'^[A-Z][A-Z0-9]{1,4}$', ean_raw, re.IGNORECASE))
+    if not is_ean and not is_nonean:
         return None
 
     desc_parts = [c(row0, 2)]
@@ -4288,14 +4292,16 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
     total_raw = c(row0, 7) if len(row0) > 7 else ""
 
     # Internal Petex code is in col 1 of the first continuation row (e.g. "13010")
+    # Non-EAN items (EWP, HP, ...) don't have an internal code — use the code as-is.
     internal_code = None
-    for extra in table[1:]:
-        candidate = c(extra, 1)
-        if candidate and re.match(r'^\d{4,9}$', candidate):
-            internal_code = candidate
-        part = c(extra, 2)
-        if part:
-            desc_parts.append(part)
+    if is_ean:
+        for extra in table[1:]:
+            candidate = c(extra, 1)
+            if candidate and re.match(r'^\d{4,9}$', candidate):
+                internal_code = candidate
+            part = c(extra, 2)
+            if part:
+                desc_parts.append(part)
 
     product_code = internal_code or ean_raw
     desc = " ".join(p for p in desc_parts if p).strip()
@@ -4341,9 +4347,13 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
     while i < len(lines):
         line = lines[i].strip()
         m = _PETEX_LINE_RE.match(line)
+        is_nonean = False
         if not m:
-            i += 1
-            continue
+            m = _PETEX_NONEAN_RE.match(line)
+            if not m:
+                i += 1
+                continue
+            is_nonean = True
 
         ean_raw = m.group(1)
         after = m.group(2).strip()
@@ -4360,18 +4370,20 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
             if not nl:
                 j += 1
                 continue
-            if _PETEX_LINE_RE.match(nl):
+            if _PETEX_LINE_RE.match(nl) or _PETEX_NONEAN_RE.match(nl):
                 break
             extra_lines.append(nl)
             j += 1
 
         # Internal Petex code is the first 4-9 digit token on any continuation line
+        # (non-EAN items like EWP/HP don't have an internal code)
         internal_code = None
-        for nl in extra_lines:
-            ic_m = re.match(r'^(\d{4,9})(?:\s|$)', nl)
-            if ic_m:
-                internal_code = ic_m.group(1)
-                break
+        if not is_nonean:
+            for nl in extra_lines:
+                ic_m = re.match(r'^(\d{4,9})(?:\s|$)', nl)
+                if ic_m:
+                    internal_code = ic_m.group(1)
+                    break
         product_code = internal_code or ean_raw
 
         search_text = line  # numeric extraction uses only the main product line
