@@ -4263,8 +4263,8 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
     pos = c(row0, 0)
     if not re.match(r'^\d{1,3}$', pos):
         return None
-    code = c(row0, 1)
-    if not re.match(r'^\d{7,13}$', code):
+    ean_raw = c(row0, 1)
+    if not re.match(r'^\d{7,13}$', ean_raw):
         return None
 
     desc_parts = [c(row0, 2)]
@@ -4274,11 +4274,17 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
     rabatt_raw= c(row0, 6) if len(row0) > 6 else ""
     total_raw = c(row0, 7) if len(row0) > 7 else ""
 
+    # Internal Petex code is in col 1 of the first continuation row (e.g. "13010")
+    internal_code = None
     for extra in table[1:]:
+        candidate = c(extra, 1)
+        if candidate and re.match(r'^\d{4,9}$', candidate):
+            internal_code = candidate
         part = c(extra, 2)
         if part:
             desc_parts.append(part)
 
+    product_code = internal_code or ean_raw
     desc = " ".join(p for p in desc_parts if p).strip()
 
     qty_val = None
@@ -4299,13 +4305,15 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
     total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
 
     rec = ProductRecord(extraction_method="table")
-    rec.product_code = code
+    rec.product_code = product_code
+    if re.match(r'^\d{13}$', ean_raw):
+        rec.ean = ean_raw
     rec.product_name = desc[:120] if desc else None
     rec.quantity     = quantity
     rec.price        = price
     rec.total_price  = total_price
     logger.info("Petex product table: code=%s qty=%s price=%s total=%s | %s",
-                code, quantity, price, total_price, desc[:60])
+                product_code, quantity, price, total_price, desc[:60])
     return rec
 
 
@@ -4322,10 +4330,10 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        code  = m.group(1)
+        ean_raw = m.group(1)
         after = m.group(2).strip()
 
-        if code in seen:
+        if ean_raw in seen:
             i += 1
             continue
 
@@ -4341,6 +4349,15 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
                 break
             extra_lines.append(nl)
             j += 1
+
+        # Internal Petex code is the first 4-9 digit token on any continuation line
+        internal_code = None
+        for nl in extra_lines:
+            ic_m = re.match(r'^(\d{4,9})(?:\s|$)', nl)
+            if ic_m:
+                internal_code = ic_m.group(1)
+                break
+        product_code = internal_code or ean_raw
 
         search_text = " ".join([line] + extra_lines)
 
@@ -4387,15 +4404,17 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
                 total_price = betrag_str.replace(',', '.') + ' EUR'
 
         logger.info("Petex code=%s qty=%s price=%s total=%s | %s",
-                    code, quantity, price, total_price, search_text[:120])
+                    product_code, quantity, price, total_price, search_text[:120])
 
         rec = ProductRecord(extraction_method="table")
-        rec.product_code  = code
+        rec.product_code  = product_code
+        if re.match(r'^\d{13}$', ean_raw):
+            rec.ean = ean_raw
         rec.product_name  = name[:120] if name else None
         rec.quantity      = quantity
         rec.price         = price
         rec.total_price   = total_price
-        seen.add(code)
+        seen.add(ean_raw)
         records.append(rec)
         i = j
 
@@ -4426,7 +4445,13 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
 
     text_records = _parse_petex_from_text(text) if text else []
 
-    records = text_records if len(text_records) > len(table_records) else table_records
+    # Table records are authoritative (correct totals); text supplements any gaps
+    table_codes = {r.product_code for r in table_records}
+    for r in text_records:
+        if r.product_code not in table_codes:
+            table_records.append(r)
+
+    records = table_records
     logger.info("Petex: %d records (table=%d text=%d)",
                 len(records), len(table_records), len(text_records))
     return records
