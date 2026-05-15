@@ -4155,6 +4155,19 @@ def _petex_net_price(preis: str, rabatt_pct: str) -> str:
         return preis.replace(',', '.')
 
 
+def _petex_eur_num(s: str) -> str | None:
+    """Parse a German number (European format: dot=thousands, comma=decimal) to '1234.56'."""
+    s = (s or "").strip()
+    if not s or not re.search(r'\d', s):
+        return None
+    if ',' in s:
+        s = s.replace('.', '').replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
 def _parse_petex_table(table: list[list]) -> list[ProductRecord]:
     """Parse one pdfplumber table from a Petex invoice.
 
@@ -4300,9 +4313,11 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
         if pct_m:
             price = _petex_net_price(price_raw, pct_m.group(1)) + ' EUR'
         else:
-            price = price_raw.replace(',', '.') + ' EUR'
+            n = _petex_eur_num(price_raw)
+            price = (n + ' EUR') if n else None
 
-    total_price = (total_raw.replace(',', '.') + ' EUR') if total_raw and re.search(r'\d', total_raw) else None
+    n = _petex_eur_num(total_raw)
+    total_price = (n + ' EUR') if n else None
 
     rec = ProductRecord(extraction_method="table")
     rec.product_code = product_code
@@ -4388,8 +4403,9 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
             after_qty = search_text
 
         # Preis + Rabatt% + Betrag after the unit marker
-        # Pattern: {preis}  {rabatt}%  ...  {betrag}
-        price_block = re.findall(r'\b(\d{1,6}[,.]\d{2})\b', after_qty)
+        # Use European number pattern: optional thousands dots + comma decimal (e.g. "1.294,56")
+        _EUR_NUM_RE = r'\d{1,3}(?:[.]\d{3})*,\d{2}'
+        price_block = re.findall(rf'\b({_EUR_NUM_RE})\b', after_qty)
         rabatt_m    = re.search(r'\b(\d+[,.]\d+)\s*%', after_qty)
 
         price = total_price = None
@@ -4399,9 +4415,11 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
             if rabatt_m:
                 price = _petex_net_price(preis_str, rabatt_m.group(1)) + ' EUR'
             else:
-                price = preis_str.replace(',', '.') + ' EUR'
+                n = _petex_eur_num(preis_str)
+                price = (n + ' EUR') if n else None
             if betrag_str and betrag_str != preis_str:
-                total_price = betrag_str.replace(',', '.') + ' EUR'
+                n = _petex_eur_num(betrag_str)
+                total_price = (n + ' EUR') if n else None
 
         logger.info("Petex code=%s qty=%s price=%s total=%s | %s",
                     product_code, quantity, price, total_price, search_text[:120])
