@@ -4374,7 +4374,7 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
                 break
         product_code = internal_code or ean_raw
 
-        search_text = " ".join([line] + extra_lines)
+        search_text = line  # numeric extraction uses only the main product line
 
         # Build description — stop before quantity/numeric data block
         name_parts = [after] if after else []
@@ -4461,17 +4461,27 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
                 seen.add(rec.product_code)
                 table_records.append(rec)
 
+    n_table = len(table_records)
     text_records = _parse_petex_from_text(text) if text else []
 
-    # Table records are authoritative (correct totals); text supplements any gaps
+    # Table records are primary. If a table record has no qty/price/total,
+    # patch it from the matching text record (table column misalignment fallback).
+    # Also add text records for products not found by table parser.
+    text_by_code = {r.product_code: r for r in text_records}
+    for r in table_records:
+        t = text_by_code.get(r.product_code)
+        if t and not r.quantity and not r.total_price:
+            r.quantity    = t.quantity
+            r.price       = t.price
+            r.total_price = t.total_price
     table_codes = {r.product_code for r in table_records}
     for r in text_records:
         if r.product_code not in table_codes:
             table_records.append(r)
 
     records = table_records
-    logger.info("Petex: %d records (table=%d text=%d)",
-                len(records), len(table_records), len(text_records))
+    logger.info("Petex: %d records (table_parser=%d text=%d)",
+                len(records), n_table, len(text_records))
     return records
 
 
