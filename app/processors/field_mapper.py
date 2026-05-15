@@ -4133,7 +4133,8 @@ def extract_geyer_hosaja_products(tables: list, text: str = "") -> list[ProductR
 # Line starts with: {1-3 digit pos}  {7-9 digit article}  {rest}
 _PETEX_LINE_RE = re.compile(r'^\s*\d{1,3}\s+(\d{7,13})\s+(.*)', re.UNICODE)
 # Non-EAN charge lines: pos CODE desc... e.g. "3 EWP Einwegpaletten ..."
-_PETEX_NONEAN_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z][A-Z0-9]{1,4})\s+(.*)', re.IGNORECASE)
+# Max 3-char code to exclude Petex annotation rows like "Text"
+_PETEX_NONEAN_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z][A-Z0-9]{1,2})\s+(.*)', re.IGNORECASE)
 
 
 def _is_petex_document(text: str) -> bool:
@@ -4280,7 +4281,7 @@ def _parse_petex_product_table(table: list[list]) -> ProductRecord | None:
         return None
     ean_raw = c(row0, 1)
     is_ean = bool(re.match(r'^\d{7,13}$', ean_raw))
-    is_nonean = bool(re.match(r'^[A-Z][A-Z0-9]{1,4}$', ean_raw, re.IGNORECASE))
+    is_nonean = bool(re.match(r'^[A-Z][A-Z0-9]{1,2}$', ean_raw, re.IGNORECASE))
     if not is_ean and not is_nonean:
         return None
 
@@ -4476,22 +4477,31 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
     n_table = len(table_records)
     text_records = _parse_petex_from_text(text) if text else []
 
-    # Table records are primary. If a table record has no qty/price/total,
-    # patch it from the matching text record (table column misalignment fallback).
-    # Also add text records for products not found by table parser.
-    text_by_code = {r.product_code: r for r in text_records}
-    for r in table_records:
-        t = text_by_code.get(r.product_code)
-        if t and not r.quantity and not r.total_price:
-            r.quantity    = t.quantity
-            r.price       = t.price
-            r.total_price = t.total_price
-    table_codes = {r.product_code for r in table_records}
-    for r in text_records:
-        if r.product_code not in table_codes:
-            table_records.append(r)
+    # Text parser reads lines sequentially → correct invoice order.
+    # Table parser has reliable numeric data (clean cell values).
+    # Strategy: text defines order; patch with table numerics when complete.
+    table_by_code = {r.product_code: r for r in table_records}
+    ordered: list[ProductRecord] = []
+    seen_codes: set[str] = set()
 
-    records = table_records
+    for r in text_records:
+        t = table_by_code.get(r.product_code)
+        if t:
+            if t.quantity and t.total_price:
+                r.quantity    = t.quantity
+                r.price       = t.price
+                r.total_price = t.total_price
+            if t.ean and not r.ean:
+                r.ean = t.ean
+        ordered.append(r)
+        seen_codes.add(r.product_code)
+
+    # Append any table records the text parser didn't find
+    for r in table_records:
+        if r.product_code not in seen_codes:
+            ordered.append(r)
+
+    records = ordered
     logger.info("Petex: %d records (table_parser=%d text=%d)",
                 len(records), n_table, len(text_records))
     return records
