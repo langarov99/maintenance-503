@@ -4341,10 +4341,11 @@ def _parse_petex_from_text(text: str) -> list[ProductRecord]:
 
 def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Petex: %d table(s) received", len(tables))
-    logger.info("Petex text — first 800 chars:\n%s", repr(text[:800]))
-    for ti, tbl in enumerate(tables[:3]):
+    logger.info("Petex text chars 0-800:\n%s", repr(text[:800]))
+    logger.info("Petex text chars 800-1800:\n%s", repr(text[800:1800]))
+    for ti, tbl in enumerate(tables[:6]):
         logger.info("Petex table[%d] (%d rows): %s", ti, len(tbl),
-                    [str(c or "")[:30] for c in (tbl[0] if tbl else [])])
+                    [[str(c or "")[:25] for c in row] for row in tbl[:3]])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
