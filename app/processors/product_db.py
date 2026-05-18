@@ -957,3 +957,14 @@ def get_slime_db(data_dir: str) -> SupplierNameDatabase:
         _slime_db = SupplierNameDatabase(data_dir, "slime-products.xlsx")
         _slime_db.load()
     return _slime_db
+
+
+_xado_db: Optional[SupplierNameDatabase] = None
+
+
+def get_xado_db(data_dir: str) -> SupplierNameDatabase:
+    global _xado_db
+    if _xado_db is None:
+        _xado_db = SupplierNameDatabase(data_dir, "xado-products.xlsx")
+        _xado_db.load()
+    return _xado_db

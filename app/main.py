@@ -19,8 +19,8 @@ from .extractors.pdf_extractor import PDFExtractor
 from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
-from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document, _is_gumarny_zubri_document, _is_wunder_baum_document, _is_slime_document
-from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db, get_wunder_baum_db, get_wunder_baum_code_map, get_bardahl_db, get_areon_db, get_areon_code_map, get_slime_db
+from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document, _is_gumarny_zubri_document, _is_wunder_baum_document, _is_slime_document, _is_xado_document
+from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db, get_wunder_baum_db, get_wunder_baum_code_map, get_bardahl_db, get_areon_db, get_areon_code_map, get_slime_db, get_xado_db
 from .output.excel_writer import write_excel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -470,6 +470,66 @@ async def extract(
                 if enriched_n:
                     logger.info("Slime: name DB enriched %d records", enriched_n)
 
+        # Xado: translate invoice description → internal code via code map, then enrich name
+        if supplier == "xado" or (supplier == "auto" and _is_xado_document(_doc_text)):
+            import re as _re
+            import pandas as _pd
+            _xado_map_path = DATA_DIR / "xado-code-map.xlsx"
+            _xado_desc_to_code: dict[str, str] = {}
+            if _xado_map_path.exists():
+                try:
+                    _df = _pd.read_excel(_xado_map_path, engine="openpyxl", header=0, dtype=str)
+                    _df = _df.fillna("")
+                    # НАШ КОД = col 0, ПРОИЗВОДИТЕЛ КОД (invoice desc) = col 1
+                    _our_col  = _df.columns[0]
+                    _desc_col = _df.columns[1]
+                    for _, _row in _df.iterrows():
+                        _desc = str(_row[_desc_col]).strip()
+                        _code = str(_row[_our_col]).strip()
+                        if _desc and _code and _desc.lower() != 'nan' and _code.lower() != 'nan':
+                            _xado_desc_to_code[_re.sub(r'\s+', '', _desc.upper())] = _code
+                    logger.info("Xado code map: %d description→code pairs", len(_xado_desc_to_code))
+                except Exception as _e:
+                    logger.warning("Xado code map read failed: %s", _e)
+
+            if _xado_desc_to_code:
+                mapped_n, unmapped = 0, []
+                for rec in records:
+                    if not rec.product_code:
+                        continue
+                    nospace = _re.sub(r'\s+', '', rec.product_code.upper())
+                    if nospace not in _xado_desc_to_code:
+                        prefix_hits = [k for k in _xado_desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
+                        if len(prefix_hits) == 1:
+                            nospace = prefix_hits[0]
+                        elif not prefix_hits:
+                            rev_hits = [k for k in _xado_desc_to_code if nospace.startswith(k)]
+                            if rev_hits:
+                                nospace = max(rev_hits, key=len)
+                    if nospace in _xado_desc_to_code:
+                        rec.product_code = _xado_desc_to_code[nospace]
+                        mapped_n += 1
+                    else:
+                        unmapped.append(rec.product_code[:50])
+                logger.info("Xado code map: %d mapped, %d unmapped", mapped_n, len(unmapped))
+                if unmapped:
+                    logger.info("Xado unmapped: %s", ", ".join(unmapped[:10]))
+
+            xado_db = get_xado_db(str(DATA_DIR))
+            if xado_db.is_loaded:
+                enriched_n = 0
+                for rec in records:
+                    if not rec.product_code:
+                        continue
+                    info = xado_db.lookup(rec.product_code)
+                    if info:
+                        rec.is_new_product = False
+                        if info.description:
+                            rec.product_name = info.description
+                            enriched_n += 1
+                if enriched_n:
+                    logger.info("Xado: name DB enriched %d records", enriched_n)
+
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
         if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(_doc_text)):
@@ -512,6 +572,7 @@ async def extract(
             "farad":           get_farad_db,
             "kegel_blazusiak": get_kegel_blazusiak_db,
             "automania":       get_automania_db,
+            "xado":            get_xado_db,
             "hakr":            get_hakr_db,
             "tompar":          get_tompar_db,
             "sonax":           get_senax_db,

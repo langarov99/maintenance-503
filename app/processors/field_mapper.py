@@ -5427,6 +5427,141 @@ def extract_bmw_products(tables: list, text: str = "") -> list[ProductRecord]:
 # ---------------------------------------------------------------------------
 # Areon (distributor: Ареон България ЕООД)
 # ---------------------------------------------------------------------------
+# Xado (Tuning Oils Club / ТУНИНГ ОЙЛС КЛУБ ЕООД)
+# Bulgarian invoice: # | Вид | Основание и предмет на сделката | мярка | колич. | ед.цена | EUR | BGN
+# No product codes in invoice — descriptions matched via xado-code-map.xlsx
+# ---------------------------------------------------------------------------
+
+def _is_xado_document(text: str) -> bool:
+    return bool(re.search(r'тунинг\s+ойлс\s+клуб|tuning\s+oils\s+club|xado', text, re.IGNORECASE))
+
+
+def _xado_num(s: str) -> str | None:
+    s = re.sub(r'\s+', '', (s or "").replace('\xa0', ''))
+    if not s:
+        return None
+    s = s.replace(',', '.')
+    try:
+        return f"{float(s):.2f}"
+    except ValueError:
+        return None
+
+
+# Matches text rows: rownum M description бр qty unit_price total_eur
+_XADO_ROW_RE = re.compile(
+    r'(\d{1,3})\s+'        # row number
+    r'M\s+'                # Вид = M
+    r'(.+?)\s+'            # description (lazy)
+    r'бр\s+'               # мярка
+    r'(\d+)\s+'            # quantity
+    r'([\d,.]+)\s+'        # unit price
+    r'([\d,.]+)',          # total EUR
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = desc_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if re.search(r'основание|предмет на сделката', joined):
+            header_idx = i
+            headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            desc_idx  = _find(["основание", "предмет"])
+            qty_idx   = _find(["колич"])
+            price_idx = _find(["ед.цена", "ед.", "цена"])
+            total_idx = _find(["eur"])
+            break
+
+    if header_idx is None:
+        return []
+
+    logger.info("Xado table header at row %d: desc=%s qty=%s price=%s total=%s",
+                header_idx, desc_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
+
+        desc = cell(desc_idx)
+        if not desc or re.search(r'общо|total|словом|данък|ддс|vat|дан\.?\s*основа|сума за плащане|дс:', desc.lower()):
+            continue
+
+        qty_raw   = cell(qty_idx)
+        qty_clean = re.sub(r'\s*бр\.?\s*$', '', qty_raw, flags=re.IGNORECASE).strip()
+        pv = _xado_num(cell(price_idx))
+        tv = _xado_num(cell(total_idx))
+
+        quantity = None
+        if qty_clean:
+            try:
+                n = int(float(qty_clean.replace(',', '.')))
+                quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+            except ValueError:
+                quantity = qty_clean
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = re.sub(r'\s+', ' ', desc).strip()
+        rec.quantity     = quantity
+        rec.price        = (pv + " EUR") if pv else None
+        rec.total_price  = (tv + " EUR") if tv else None
+        records.append(rec)
+        logger.info("Xado table: desc=%s qty=%s price=%s total=%s", desc[:50], quantity, pv, tv)
+
+    return records
+
+
+def _parse_xado_text(text: str) -> list[ProductRecord]:
+    records = []
+    logger.info("Xado text fallback — first 400 chars:\n%s", repr(text[:400]))
+    for m in _XADO_ROW_RE.finditer(text):
+        _pos, desc, qty_raw, price_raw, total_raw = m.groups()
+        desc = re.sub(r'\s+', ' ', desc).strip()
+        if re.search(r'общо|total|словом|ддс|дан\.?\s*основа', desc.lower()):
+            continue
+        pv = _xado_num(price_raw)
+        tv = _xado_num(total_raw)
+        try:
+            n = int(float(qty_raw))
+            quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+        except ValueError:
+            quantity = qty_raw
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = desc
+        rec.quantity     = quantity
+        rec.price        = (pv + " EUR") if pv else None
+        rec.total_price  = (tv + " EUR") if tv else None
+        records.append(rec)
+        logger.info("Xado text: desc=%s qty=%s price=%s total=%s", desc[:50], quantity, pv, tv)
+    logger.info("Xado text extraction: %d records", len(records))
+    return records
+
+
+def extract_xado_products(tables: list, text: str = "") -> list[ProductRecord]:
+    for table in tables:
+        recs = _parse_xado_table(table)
+        if recs:
+            logger.info("Xado table extraction: %d records", len(recs))
+            return recs
+    return _parse_xado_text(text)
+
+
+# ---------------------------------------------------------------------------
+# Areon (Ареон България)
+# ---------------------------------------------------------------------------
 
 def _is_areon_document(text: str) -> bool:
     return bool(re.search(r'ареон\s+българия|areon\s+car\s+perfume', text, re.IGNORECASE))
@@ -6358,7 +6493,15 @@ class FieldMapper:
                 logger.info("Extraction method: Areon (%d records)", len(records))
                 return records
 
-        # Step 0z2 — Slime / ITW Global Tire Repair (explicit selection or auto-detection)
+        # Step 0z2 — Xado / Tuning Oils Club (explicit selection or auto-detection)
+        if supplier == "xado" or (supplier == "auto" and _is_xado_document(text)):
+            _specific_tried = True
+            records = extract_xado_products(tables, text)
+            if records:
+                logger.info("Extraction method: Xado (%d records)", len(records))
+                return records
+
+        # Step 0z3 — Slime / ITW Global Tire Repair (explicit selection or auto-detection)
         if supplier == "slime" or (supplier == "auto" and _is_slime_document(text)):
             _specific_tried = True
             records = extract_slime_products(tables, text)
