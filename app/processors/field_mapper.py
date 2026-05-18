@@ -5483,6 +5483,12 @@ def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
             qty_idx   = _find(["колич"])
             price_idx = _find(["ед.цена", "ед.", "цена"])
             total_idx = _find(["eur"])
+            # Fallback: pdfplumber may label the column "СТОЙНОСТ" without "EUR"
+            if total_idx is None and price_idx is not None:
+                for j in range(price_idx + 1, len(headers)):
+                    if "стойност" in headers[j]:
+                        total_idx = j
+                        break
             break
 
     if header_idx is None:
@@ -5497,11 +5503,13 @@ def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
 
         desc = cell(desc_idx)
-        if not desc or re.search(r'общо|total|словом|данък|ддс|vat|дан\.?\s*основа|сума за плащане|дс:', desc.lower()):
+        # Skip summary/footer rows; do NOT skip "total" — Xado product names contain it (e.g. "Total Flush")
+        if not desc or re.search(r'общо|словом|данък|ддс|vat|дан\.?\s*основа|сума за плащане|дс:', desc.lower()):
             continue
 
         qty_raw   = cell(qty_idx)
         qty_clean = re.sub(r'\s*бр\.?\s*$', '', qty_raw, flags=re.IGNORECASE).strip()
+        qty_clean = re.sub(r'^[^\d]*', '', qty_clean).strip()  # strip leading non-digits (e.g. "И 2" → "2")
         pv = _xado_num(cell(price_idx))
         tv = _xado_num(cell(total_idx))
 

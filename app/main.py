@@ -483,11 +483,24 @@ async def extract(
                     # НАШ КОД = col 0, ПРОИЗВОДИТЕЛ КОД (invoice desc) = col 1
                     _our_col  = _df.columns[0]
                     _desc_col = _df.columns[1]
+                    def _xado_norm(s: str) -> str:
+                        return _re.sub(r'\s+', '', s.upper())
+
+                    def _xado_norm_stripped(s: str) -> str:
+                        # Also strip single-letter Cyrillic prepositions (в, у, с, к, о...)
+                        # so "промивка в двигател" matches "промивка двигател"
+                        s2 = _re.sub(r'\b[А-ЯЁа-яё]\b\s*', '', s.upper())
+                        return _re.sub(r'\s+', '', s2)
+
                     for _, _row in _df.iterrows():
                         _desc = str(_row[_desc_col]).strip()
                         _code = str(_row[_our_col]).strip()
                         if _desc and _code and _desc.lower() != 'nan' and _code.lower() != 'nan':
-                            _xado_desc_to_code[_re.sub(r'\s+', '', _desc.upper())] = _code
+                            _xado_desc_to_code[_xado_norm(_desc)] = _code
+                            # Secondary key without single-letter prepositions
+                            _sk = _xado_norm_stripped(_desc)
+                            if _sk != _xado_norm(_desc):
+                                _xado_desc_to_code[_sk] = _code
                     logger.info("Xado code map: %d description→code pairs", len(_xado_desc_to_code))
                 except Exception as _e:
                     logger.warning("Xado code map read failed: %s", _e)
@@ -497,7 +510,13 @@ async def extract(
                 for rec in records:
                     if not rec.product_code:
                         continue
-                    nospace = _re.sub(r'\s+', '', rec.product_code.upper())
+                    nospace = _xado_norm(rec.product_code)
+                    # Also try stripped version (removes single-letter prepositions)
+                    nospace_stripped = _xado_norm_stripped(rec.product_code)
+                    for _ns in ([nospace, nospace_stripped] if nospace_stripped != nospace else [nospace]):
+                        if _ns in _xado_desc_to_code:
+                            nospace = _ns
+                            break
                     if nospace not in _xado_desc_to_code:
                         prefix_hits = [k for k in _xado_desc_to_code if k.startswith(nospace) and len(k) - len(nospace) <= 12]
                         if len(prefix_hits) == 1:
