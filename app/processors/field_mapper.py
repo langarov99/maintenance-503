@@ -5481,7 +5481,10 @@ def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
 
             desc_idx  = _find(["основание", "предмет"])
             qty_idx   = _find(["колич"])
-            price_idx = _find(["ед.цена", "ед.", "цена"])
+            # Search for unit price: avoid matching "ед. мярка" (unit of measure)
+            price_idx = _find(["ед.цена", "единична цена", "ед. цена"])
+            if price_idx is None:
+                price_idx = next((j for j, h in enumerate(headers) if "цена" in h and "мярка" not in h), None)
             total_idx = _find(["eur"])
             # Fallback: pdfplumber may label the column "СТОЙНОСТ" without "EUR"
             if total_idx is None and price_idx is not None:
@@ -5489,6 +5492,7 @@ def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
                     if "стойност" in headers[j]:
                         total_idx = j
                         break
+            logger.info("Xado table headers: %s", headers)
             break
 
     if header_idx is None:

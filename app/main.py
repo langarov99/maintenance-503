@@ -484,12 +484,16 @@ async def extract(
                     _our_col  = _df.columns[0]
                     _desc_col = _df.columns[1]
                     def _xado_norm(s: str) -> str:
-                        return _re.sub(r'\s+', '', s.upper())
+                        s = s.upper()
+                        # Transliterate Cyrillic brand name "ХАДО" → Latin "XADO"
+                        s = s.replace('ХАДО', 'XADO')
+                        return _re.sub(r'\s+', '', s)
 
                     def _xado_norm_stripped(s: str) -> str:
                         # Also strip single-letter Cyrillic prepositions (в, у, с, к, о...)
                         # so "промивка в двигател" matches "промивка двигател"
-                        s2 = _re.sub(r'\b[А-ЯЁа-яё]\b\s*', '', s.upper())
+                        s = s.upper().replace('ХАДО', 'XADO')
+                        s2 = _re.sub(r'\b[А-ЯЁа-яё]\b\s*', '', s)
                         return _re.sub(r'\s+', '', s2)
 
                     for _, _row in _df.iterrows():
