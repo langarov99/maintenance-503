@@ -5590,7 +5590,7 @@ def extract_xado_products(tables: list, text: str = "") -> list[ProductRecord]:
 # ---------------------------------------------------------------------------
 
 def _is_areon_document(text: str) -> bool:
-    return bool(re.search(r'ареон\s+българия|areon\s+car\s+perfume', text, re.IGNORECASE))
+    return bool(re.search(r'ареон\s+българия|аромати\s+българия|areon\s+car\s+perfume', text, re.IGNORECASE))
 
 
 def _areon_num(s: str) -> str | None:
@@ -5606,13 +5606,14 @@ def _areon_num(s: str) -> str | None:
 # Matches a product row in extracted text:
 # <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR [optional suffix]
 _AREON_ROW_RE = re.compile(
-    r'(\d+)\s+'             # position number
-    r'([А-ЯA-Z][^\n\r]*?)'  # description (lazy, no newlines)
-    r'\s+(\d+)\s*БР\s+'     # qty + БР (space before БР optional)
-    r'([\d,.]+)\s+EUR\s+'   # unit price
-    r'\d+\s*БР\s+'          # per (ignored, space before БР optional)
-    r'([\d,.]+)\s+EUR'      # total
-    r'([ \t][^\n\r]*)?',    # optional description suffix on same line (e.g. "ЧЕР.ВАНИЛИЯ")
+    # qty has NO space before БР ("10БР"); per DOES have space ("1 БР") — use this to split
+    r'(\d+)\s+'           # position number
+    r'([А-ЯA-Z][^\n]*?)'  # description (lazy, no newlines)
+    r'\s+(\d+)БР\s+'      # qty immediately followed by БР
+    r'([\d,.]+)\s+EUR\s+' # unit price
+    r'\d+\s+БР\s+'        # per (ignored)
+    r'([\d,.]+)\s+EUR'    # total
+    r'([ \t][^\n]*)?',    # optional description suffix on same line (e.g. "ЧЕР.ВАНИЛИЯ")
     re.IGNORECASE,
 )
 
@@ -5625,8 +5626,7 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
 
     for i, row in enumerate(table):
         joined = " ".join(str(c or "").lower() for c in row)
-        logger.debug("Areon table row %d: %s", i, joined[:120])
-        if re.search(r'поз|poz|№|no\.', joined) and re.search(r'описание|description|артикул|наименование', joined):
+        if re.search(r'поз|poz', joined) and re.search(r'описание|description', joined):
             header_idx = i
             headers = [str(c or "").lower().strip() for c in row]
 
@@ -5638,15 +5638,13 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
                 return None
 
             poz_idx   = _find(["поз", "poz", "no.", "№"])
-            desc_idx  = _find(["описание", "description", "артикул", "наименование"])
-            qty_idx   = _find(["кол", "qty", "количество"])
+            desc_idx  = _find(["описание", "description", "артикул"])
+            qty_idx   = _find(["кол", "qty"])
             price_idx = _find(["цена", "price"])
-            total_idx = _find(["стойност", "total", "amount", "сума"])
+            total_idx = _find(["стойност", "total", "amount"])
             break
 
     if header_idx is None:
-        logger.warning("Areon table: no header row found — rows: %s",
-                       [" ".join(str(c or "")[:20] for c in r) for r in table[:5]])
         return []
 
     logger.info("Areon table header at row %d: poz=%s desc=%s qty=%s price=%s total=%s",
@@ -5684,7 +5682,7 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
 def _parse_areon_text(text: str) -> list[ProductRecord]:
     """Text-based fallback when pdfplumber cannot split Areon table columns."""
     records = []
-    logger.info("Areon text fallback — first 1500 chars:\n%s", repr(text[:1500]))
+    logger.info("Areon text fallback — first 500 chars:\n%s", repr(text[:500]))
 
     matches = list(_AREON_ROW_RE.finditer(text))
     for i, m in enumerate(matches):
@@ -5739,9 +5737,19 @@ def extract_areon_products(tables: list, text: str = "") -> list[ProductRecord]:
         logger.warning("Areon: table results look like merged cells, switching to text fallback")
         raw = []
 
+    # Aromati Bulgaria subsidiary — different table headers; try as fallback
+    if not raw:
+        for table in tables:
+            raw.extend(_parse_aromati_table(table))
+        if raw and all(len(rec.product_code) > 100 for rec in raw):
+            raw = []
+
     if not raw:
         logger.info("Areon: table extraction yielded nothing, trying text fallback")
         raw = _parse_areon_text(text)
+        # Aromati subsidiary — slightly different text layout; try as fallback
+        if not raw:
+            raw = _parse_aromati_text(text)
 
     seen: dict[str, ProductRecord] = {}
     for rec in raw:
@@ -5752,6 +5760,137 @@ def extract_areon_products(tables: list, text: str = "") -> list[ProductRecord]:
     records = list(seen.values())
     if records:
         logger.info("Areon: %d records (after dedup)", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Aromati Bulgaria (Аромати България ЕООД) — subsidiary of Areon
+# Invoice format similar to Areon but with different column headers and spacing.
+# ---------------------------------------------------------------------------
+
+def _is_aromati_document(text: str) -> bool:
+    return bool(re.search(r'аромати\s+българия', text, re.IGNORECASE))
+
+
+# Matches product rows — same EUR structure as Areon but allows optional space before БР
+_AROMATI_ROW_RE = re.compile(
+    r'(\d+)\s+'             # position number
+    r'([А-ЯA-Z][^\n\r]*?)'  # description (lazy, no CR/LF)
+    r'\s+(\d+)\s*БР\.?\s+'  # qty + БР (space optional, dot optional)
+    r'([\d,.]+)\s+EUR\s+'   # unit price
+    r'\d+\s*БР\.?\s+'       # per (ignored)
+    r'([\d,.]+)\s+EUR'      # total
+    r'([ \t][^\n\r]*)?',    # optional same-line suffix
+    re.IGNORECASE,
+)
+
+
+def _parse_aromati_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = poz_idx = desc_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        logger.info("Aromati table row %d: %s", i, joined[:150])
+        if re.search(r'поз|poz|№|no\.', joined) and re.search(
+                r'описание|description|артикул|наименование', joined):
+            header_idx = i
+            headers = [str(c or "").lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            poz_idx   = _find(["поз", "poz", "no.", "№"])
+            desc_idx  = _find(["описание", "description", "артикул", "наименование"])
+            qty_idx   = _find(["кол", "qty", "количество"])
+            price_idx = _find(["цена", "price"])
+            total_idx = _find(["стойност", "total", "amount", "сума"])
+            break
+
+    if header_idx is None:
+        logger.warning("Aromati table: no header row — rows: %s",
+                       [" ".join(str(c or "")[:20] for c in r) for r in table[:5]])
+        return []
+
+    logger.info("Aromati table header at row %d: poz=%s desc=%s qty=%s price=%s total=%s",
+                header_idx, poz_idx, desc_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
+
+        desc = cell(desc_idx)
+        if not desc or re.search(r'общо|total|словом|данък|ддс|vat|получател', desc.lower()):
+            continue
+
+        qty_raw   = cell(qty_idx)
+        qty_clean = re.sub(r'\s*[A-ZА-Яa-zа-я]+\.?\s*$', '', qty_raw).strip()
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = re.sub(r'\s+', ' ', desc).upper()
+        if qty_clean:
+            rec.quantity = qty_clean
+        pv = _areon_num(cell(price_idx))
+        if pv:
+            rec.price = pv + " EUR"
+        tv = _areon_num(cell(total_idx))
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Aromati table: desc=%s qty=%s price=%s total=%s", desc[:50], qty_clean, pv, tv)
+
+    return records
+
+
+def _parse_aromati_text(text: str) -> list[ProductRecord]:
+    records = []
+    logger.info("Aromati text fallback — first 1500 chars:\n%s", repr(text[:1500]))
+
+    matches = list(_AROMATI_ROW_RE.finditer(text))
+    logger.info("Aromati text: regex found %d match(es)", len(matches))
+    for i, m in enumerate(matches):
+        poz, desc, qty_raw, price_raw, total_raw, desc_suffix = m.groups()
+        desc = re.sub(r'\s+', ' ', desc).strip().upper()
+
+        if desc_suffix:
+            suffix_clean = re.sub(r'\s+', ' ', desc_suffix).strip().upper()
+            if suffix_clean:
+                desc = desc + " " + suffix_clean
+
+        # Next-line suffix: same logic as Areon
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        between = text[m.end():next_start]
+        between_clean = re.sub(r'\s+', ' ', between).strip()
+        if between_clean and re.search(r'[А-ЯЁа-яё]', between_clean) and not re.search(r'\d', between_clean):
+            desc = desc + " " + between_clean.upper()
+
+        if re.search(r'общо|total|словом|ддс|vat', desc.lower()):
+            continue
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = desc
+        qty_clean = re.sub(r'[^0-9.,]', '', qty_raw).strip()
+        if qty_clean:
+            rec.quantity = qty_clean
+        pv = _areon_num(price_raw)
+        if pv:
+            rec.price = pv + " EUR"
+        tv = _areon_num(total_raw)
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Aromati text: poz=%s desc=%s qty=%s price=%s total=%s",
+                    poz, desc[:50], qty_clean, pv, tv)
+
     return records
 
 
