@@ -6596,11 +6596,27 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
             .replace('рcs', 'pcs')   # Cyrillic р misread as Latin p before "cs"
             .replace('рс', 'pc')     # Cyrillic рс misread as pc
             )
-    logger.info("Rati text fallback — full OCR text (%d chars):\n%s", len(text), text)
+
+    # Fix Cyrillic OCR artifacts in product code tokens on qty lines.
+    # Tesseract reads Latin M/O/C/A and digit 3 as Cyrillic М/О/С/А/З in codes.
+    _CYR_CODE_MAP = str.maketrans('МОСЗА', 'M0C3A')
+    _fixed = []
+    for _ln in text.splitlines():
+        if re.search(r'p[ce]s\s*/\s*db', _ln, re.IGNORECASE):
+            _toks = _ln.split()
+            for _ti, _tok in enumerate(_toks):
+                if re.match(r'^[А-ЯA-Z][А-ЯA-Z0-9]{3,8}$', _tok):
+                    _toks[_ti] = _tok.translate(_CYR_CODE_MAP)
+                    break
+            _ln = ' '.join(_toks)
+        _fixed.append(_ln)
+    text = '\n'.join(_fixed)
+
+    logger.info("Rati text fallback — first 2000 chars:\n%s", repr(text[:2000]))
 
     _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*)\b')
     _RATI_QTY_PRICE_RE = re.compile(
-        r'(\d+)\s*pcs\s*/\s*db\s+([\d.]+)\s+([\d.]+)', re.IGNORECASE)
+        r'(\d+)\s*p[ce]s\s*/\s*db\s+([\d.]+)\s+([\d.]+)', re.IGNORECASE)
 
     lines = text.splitlines()
     used = set()  # line indices already consumed
@@ -6643,12 +6659,11 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
             kl = lines[k].strip()
             if not kl:
                 continue
-            # Stop if we hit another product code line
-            if _RATI_CODE_ONLY_RE.search(kl) and _RATI_QTY_PRICE_RE.search(kl):
+            # Stop at next product's qty line — don't consume it
+            if k != qty_line_idx and _RATI_QTY_PRICE_RE.search(kl):
                 break
-            # Skip the qty/price line itself
-            if _RATI_QTY_PRICE_RE.search(kl):
-                used.add(k)
+            # Skip current product's qty line (already marked as used)
+            if k == qty_line_idx:
                 continue
             used.add(k)
             ean_m = _RATI_EAN_RE.match(kl)
