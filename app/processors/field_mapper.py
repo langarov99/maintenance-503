@@ -6581,64 +6581,91 @@ def _parse_rati_table(table: list[list]) -> list[ProductRecord]:
 
 
 def _parse_rati_text(text: str) -> list[ProductRecord]:
-    """Text fallback: product code line followed by EAN and description lines."""
-    records = []
-    logger.info("Rati text fallback — first 800 chars:\n%s", repr(text[:800]))
+    """Text fallback: product code line followed by EAN and description lines.
 
-    # Primary: position number + code + qty pcs/db + price + total on one line
-    _RATI_LINE_RE = re.compile(
-        r'(?:\d+\s+)?'                   # optional position number
-        r'([A-Z]\d{3,7}[A-Z]?\d*)\s+'   # product code (V01945B)
-        r'(\d+)\s*pcs\s*/\s*db\s+'       # quantity
-        r'([\d.]+)\s+'                   # unit price
-        r'([\d.]+)',                     # total net
-        re.IGNORECASE
-    )
+    Handles two OCR layouts:
+    A) Code + qty + prices all on the same line (clean PyMuPDF / page 3 OCR):
+       "V01945B  2 pcs / db  52.40  104.80"
+    B) Code on one line, qty+prices on a nearby line (multi-column OCR pages 1-2):
+       "V01945B"  ...  "2 pcs / db  52.40  104.80"
+    """
+    records = []
+    logger.info("Rati text fallback — first 1500 chars:\n%s", repr(text[:1500]))
+
+    _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*)\b')
+    _RATI_QTY_PRICE_RE = re.compile(
+        r'(\d+)\s*pcs\s*/\s*db\s+([\d.]+)\s+([\d.]+)', re.IGNORECASE)
 
     lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        m = _RATI_LINE_RE.search(line)
-        if m:
-            code, qty_s, pv_s, tv_s = m.groups()
-            ean = None
-            desc_lines = []
-            j = i + 1
-            while j < len(lines) and j < i + 8:
-                nxt = lines[j].strip()
-                if _RATI_LINE_RE.search(nxt):
-                    break
-                ean_m = _RATI_EAN_RE.match(nxt)
-                if ean_m:
-                    ean = ean_m.group(1)
-                elif nxt and not re.match(r'^\d+$', nxt):
-                    desc_lines.append(nxt)
-                j += 1
+    used = set()  # line indices already consumed
 
-            desc_raw = " ".join(desc_lines).strip()
-            if " / " in desc_raw:
-                desc_raw = desc_raw.split(" / ")[0].strip()
+    for i, line in enumerate(lines):
+        if i in used:
+            continue
+        line_s = line.strip()
 
-            pv = _rati_num(pv_s)
-            tv = _rati_num(tv_s)
+        # Does this line contain a product code?
+        code_m = _RATI_CODE_ONLY_RE.search(line_s)
+        if not code_m:
+            continue
+        code = code_m.group(1)
 
-            rec = ProductRecord(extraction_method="text")
-            rec.product_code = code
-            rec.ean          = ean
-            if desc_raw:
-                rec.product_name = desc_raw
-            rec.quantity     = qty_s
-            if pv:
-                rec.price = pv + " EUR"
-            if tv:
-                rec.total_price = tv + " EUR"
-            records.append(rec)
-            logger.info("Rati text: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
-                        code, ean, desc_raw[:40] if desc_raw else "", qty_s, pv, tv)
-            i = j
-        else:
-            i += 1
+        # Look for qty+prices on this line OR within the next 6 lines
+        qty_s = pv_s = tv_s = None
+        qty_line_idx = None
+        window = [line_s] + [lines[k].strip() for k in range(i + 1, min(i + 7, len(lines)))]
+        for wi, wl in enumerate(window):
+            qm = _RATI_QTY_PRICE_RE.search(wl)
+            if qm:
+                qty_s, pv_s, tv_s = qm.groups()
+                qty_line_idx = i + wi
+                break
+
+        if qty_s is None:
+            continue  # no qty found near this code — not a product row
+
+        # Collect EAN and description from lines between code and qty line
+        ean = None
+        desc_lines = []
+        end = qty_line_idx if qty_line_idx is not None else i + 6
+        for k in range(i, end + 1):
+            if k >= len(lines):
+                break
+            used.add(k)
+            kl = lines[k].strip()
+            if k == i:
+                # Same line as code — skip the code itself, keep any trailing text
+                after_code = line_s[code_m.end():].strip()
+                # Don't re-parse qty line as description
+                if after_code and not _RATI_QTY_PRICE_RE.search(after_code):
+                    pass  # nothing useful after code on same line normally
+                continue
+            ean_m = _RATI_EAN_RE.match(kl)
+            if ean_m:
+                ean = ean_m.group(1)
+            elif kl and not re.match(r'^\d+$', kl) and not _RATI_QTY_PRICE_RE.search(kl):
+                desc_lines.append(kl)
+
+        desc_raw = " ".join(desc_lines).strip()
+        if " / " in desc_raw:
+            desc_raw = desc_raw.split(" / ")[0].strip()
+
+        pv = _rati_num(pv_s)
+        tv = _rati_num(tv_s)
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+        rec.ean          = ean
+        if desc_raw:
+            rec.product_name = desc_raw
+        rec.quantity     = qty_s
+        if pv:
+            rec.price = pv + " EUR"
+        if tv:
+            rec.total_price = tv + " EUR"
+        records.append(rec)
+        logger.info("Rati text: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
+                    code, ean, desc_raw[:40] if desc_raw else "", qty_s, pv, tv)
 
     logger.info("Rati text extraction: %d records", len(records))
     return records

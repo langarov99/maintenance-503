@@ -10,11 +10,14 @@ logger = logging.getLogger(__name__)
 try:
     import fitz  # PyMuPDF (legacy import name)
     _FITZ_AVAILABLE = True
-except Exception:
+except Exception as _fitz_err:
     try:
         import pymupdf as fitz  # PyMuPDF >= 1.24 new import name
         _FITZ_AVAILABLE = True
-    except Exception:
+    except Exception as _pymupdf_err:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "PyMuPDF unavailable — fitz: %s | pymupdf: %s", _fitz_err, _pymupdf_err)
         _FITZ_AVAILABLE = False
 
 
