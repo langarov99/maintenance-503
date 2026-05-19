@@ -6614,7 +6614,7 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
 
     logger.info("Rati text fallback — first 2000 chars:\n%s", repr(text[:2000]))
 
-    _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*|[A-Z]{2,}\d+[A-Z]+)\b')
+    _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*|[A-Z]{3,}\d+[A-Z]{2,})\b')
     _RATI_QTY_PRICE_RE = re.compile(
         r'(\d+)\s*p[ce]s\s*/\s*db\s+([\d.]+)\s+([\d.]+)', re.IGNORECASE)
 
