@@ -1,4 +1,5 @@
 import logging
+import re
 import pdfplumber
 from PIL import Image
 import io
@@ -13,6 +14,14 @@ except Exception:
     _FITZ_AVAILABLE = False
 
 
+def _is_cid_garbage(text: str) -> bool:
+    """Return True when text is mostly (cid:XX) sequences — undecodable custom font."""
+    if not text or len(text) < 20:
+        return False
+    cid_hits = len(re.findall(r'\(cid:\d+\)', text))
+    return cid_hits > 10 and cid_hits * 7 > len(text) * 0.3
+
+
 class PDFExtractor:
     def __init__(self, ocr_languages: list[str] = None):
         self.ocr_languages = ocr_languages or ["bg", "en"]
@@ -25,12 +34,28 @@ class PDFExtractor:
         return self._image_extractor
 
     def extract(self, file_path: str) -> dict:
-        text = self._extract_text(file_path)
+        text   = self._extract_text(file_path)
         tables = self._extract_tables(file_path)
 
-        if not text.strip() and not tables:
-            text = self._extract_via_ocr(file_path)
-            source = "ocr"
+        if not text.strip() or _is_cid_garbage(text):
+            # pdfplumber produced garbage — try PyMuPDF text first
+            if _FITZ_AVAILABLE:
+                fitz_text = self._extract_text_via_fitz(file_path)
+                if fitz_text.strip() and not _is_cid_garbage(fitz_text):
+                    logger.info("CID garbage detected — switched to PyMuPDF text")
+                    text   = fitz_text
+                    source = "text_fitz"
+                    # Also re-try tables via fitz if pdfplumber found none
+                    if not tables:
+                        tables = self._extract_tables_via_fitz(file_path)
+                else:
+                    logger.info("CID garbage detected — falling back to OCR")
+                    text   = self._extract_via_ocr(file_path)
+                    source = "ocr"
+            else:
+                logger.info("CID garbage detected — falling back to OCR (no fitz)")
+                text   = self._extract_via_ocr(file_path)
+                source = "ocr"
         else:
             source = "text"
 
@@ -52,6 +77,18 @@ class PDFExtractor:
             logger.error("PDF text extraction error: %s", e)
         return "\n".join(pages_text)
 
+    def _extract_text_via_fitz(self, file_path: str) -> str:
+        """Extract text using PyMuPDF — handles custom/embedded fonts better."""
+        doc = fitz.open(file_path)
+        pages_text = []
+        total = len(doc)
+        for page_num, page in enumerate(doc, start=1):
+            page_text = page.get_text("text") or ""
+            pages_text.append(page_text)
+            logger.info("  fitz Page %d/%d: %d chars", page_num, total, len(page_text))
+        doc.close()
+        return "\n".join(pages_text)
+
     def _extract_tables(self, file_path: str) -> list[list[list]]:
         tables = []
         try:
@@ -62,6 +99,21 @@ class PDFExtractor:
                             tables.append(table)
         except Exception:
             pass
+        return tables
+
+    def _extract_tables_via_fitz(self, file_path: str) -> list[list[list]]:
+        """Extract tables via PyMuPDF (available in fitz >= 1.23)."""
+        tables = []
+        try:
+            doc = fitz.open(file_path)
+            for page in doc:
+                for tab in page.find_tables():
+                    rows = tab.extract()
+                    if rows:
+                        tables.append(rows)
+            doc.close()
+        except Exception as e:
+            logger.debug("fitz table extraction failed: %s", e)
         return tables
 
     def _extract_via_ocr(self, file_path: str) -> str:
