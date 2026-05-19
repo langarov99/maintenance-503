@@ -5518,12 +5518,26 @@ def _parse_xado_table(table: list[list]) -> list[ProductRecord]:
         tv = _xado_num(cell(total_idx))
 
         quantity = None
+        qty_n = None
         if qty_clean:
             try:
-                n = int(float(qty_clean.replace(',', '.')))
-                quantity = f"{n} {'Брой' if n == 1 else 'Броя'}"
+                qty_n = int(float(qty_clean.replace(',', '.')))
+                quantity = f"{qty_n} {'Брой' if qty_n == 1 else 'Броя'}"
             except ValueError:
                 quantity = qty_clean
+
+        # Derive missing price or total from the other when qty is known
+        if qty_n and qty_n > 0:
+            if pv is None and tv is not None:
+                try:
+                    pv = f"{float(tv) / qty_n:.2f}"
+                except (ValueError, ZeroDivisionError):
+                    pass
+            elif tv is None and pv is not None:
+                try:
+                    tv = f"{float(pv) * qty_n:.2f}"
+                except ValueError:
+                    pass
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = re.sub(r'\s+', ' ', desc).strip()
