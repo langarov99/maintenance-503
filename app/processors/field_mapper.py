@@ -6447,6 +6447,213 @@ def extract_slime_products(tables: list, text: str = "") -> list[ProductRecord]:
     return records
 
 
+# ---------------------------------------------------------------------------
+# Rati (RATI KFT — Hungarian car accessories supplier)
+# Invoice format: multi-row per product in "Part No" column:
+#   Line 0: product code (e.g. V01945B)
+#   Line 1: EAN in parentheses (e.g. (5998167719451))
+#   Line 2: description (bilingual, split by " / " — take first part)
+#   Line 3: customs code (all digits, 8 chars — ignored)
+# Quantity column: "N pcs / db", Unit Price and Total Net Amount are separate cols.
+# ---------------------------------------------------------------------------
+
+def _is_rati_document(text: str) -> bool:
+    return bool(re.search(r'rati\s+kft|www\.rati\.hu|contact@rati\.hu', text, re.IGNORECASE))
+
+
+_RATI_CODE_RE = re.compile(r'^[A-Z]\d{3,7}[A-Z]?\d*$')
+_RATI_EAN_RE  = re.compile(r'^\((\d{8,14})\)$')
+
+
+def _rati_num(s: str) -> str | None:
+    s = (s or "").strip().replace(' ', '')
+    m = re.search(r'\d+[.,]\d+|\d+', s)
+    if m:
+        try:
+            return f"{float(m.group().replace(',', '.')):.2f}"
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_rati_cell(code_cell: str) -> tuple[str | None, str | None, str | None]:
+    """Parse the multi-line Part No cell into (product_code, ean, description)."""
+    lines = [l.strip() for l in re.split(r'\n|\r', code_cell) if l.strip()]
+    if not lines:
+        return None, None, None
+
+    product_code = lines[0]
+    if not _RATI_CODE_RE.match(product_code):
+        return None, None, None
+
+    ean = None
+    desc_lines = []
+    for line in lines[1:]:
+        if ean is None:
+            m_ean = _RATI_EAN_RE.match(line)
+            if m_ean:
+                ean = m_ean.group(1)
+                continue
+        if re.match(r'^\d+$', line):  # skip all-digit customs codes
+            continue
+        desc_lines.append(line)
+
+    desc_raw = " ".join(desc_lines).strip()
+    if " / " in desc_raw:
+        desc_raw = desc_raw.split(" / ")[0].strip()
+
+    return product_code, ean, desc_raw or None
+
+
+def _parse_rati_table(table: list[list]) -> list[ProductRecord]:
+    if not table:
+        return []
+
+    header_idx = code_idx = qty_idx = price_idx = total_idx = None
+
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if re.search(r'part\s*no|cikkszám', joined):
+            header_idx = i
+            headers = [re.sub(r'\s+', ' ', str(c or "")).lower().strip() for c in row]
+
+            def _find(kws):
+                for kw in kws:
+                    for j, h in enumerate(headers):
+                        if kw in h:
+                            return j
+                return None
+
+            code_idx  = _find(["part no", "cikkszám"])
+            qty_idx   = _find(["quantity", "mennyiség", "uom"])
+            price_idx = _find(["unit price", "egységár"])
+            total_idx = _find(["total net", "net amount", "érték (áfa nélkül)"])
+            if total_idx is None:
+                total_idx = _find(["érték"])  # first "érték" col = net (before gross)
+            break
+
+    if header_idx is None:
+        logger.info("Rati table: no header found — rows: %s",
+                    [" ".join(str(c or "")[:20] for c in r) for r in table[:3]])
+        return []
+
+    logger.info("Rati table header at row %d: code=%s qty=%s price=%s total=%s",
+                header_idx, code_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(idx):
+            return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() \
+                if idx is not None and idx < len(row) else ""
+
+        code_cell = cell(code_idx)
+        if not code_cell:
+            continue
+
+        product_code, ean, desc = _parse_rati_cell(code_cell)
+        if not product_code:
+            continue
+
+        qty_raw = cell(qty_idx)
+        qty_m   = re.search(r'(\d+)', qty_raw)
+        qty     = qty_m.group(1) if qty_m else None
+
+        pv = _rati_num(cell(price_idx))
+        tv = _rati_num(cell(total_idx))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = product_code
+        rec.ean          = ean
+        if desc:
+            rec.product_name = desc
+        if qty:
+            rec.quantity = qty
+        if pv:
+            rec.price = pv + " EUR"
+        if tv:
+            rec.total_price = tv + " EUR"
+
+        records.append(rec)
+        logger.info("Rati table: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
+                    product_code, ean, (desc or "")[:40], qty, pv, tv)
+
+    return records
+
+
+def _parse_rati_text(text: str) -> list[ProductRecord]:
+    """Text fallback: product code line followed by EAN and description lines."""
+    records = []
+    logger.info("Rati text fallback — first 800 chars:\n%s", repr(text[:800]))
+
+    _RATI_LINE_RE = re.compile(
+        r'(\d+)\s+'
+        r'([A-Z]\d{3,7}[A-Z]?\d*)\s+'
+        r'(\d+)\s*pcs\s*/\s*db\s+'
+        r'([\d.]+)\s+'
+        r'([\d.]+)',
+        re.IGNORECASE
+    )
+
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = _RATI_LINE_RE.match(line)
+        if m:
+            _pos, code, qty_s, pv_s, tv_s = m.groups()
+            ean = None
+            desc_lines = []
+            j = i + 1
+            while j < len(lines) and j < i + 6:
+                nxt = lines[j].strip()
+                if _RATI_LINE_RE.match(nxt):
+                    break
+                ean_m = _RATI_EAN_RE.match(nxt)
+                if ean_m:
+                    ean = ean_m.group(1)
+                elif nxt and not re.match(r'^\d+$', nxt):
+                    desc_lines.append(nxt)
+                j += 1
+
+            desc_raw = " ".join(desc_lines).strip()
+            if " / " in desc_raw:
+                desc_raw = desc_raw.split(" / ")[0].strip()
+
+            pv = _rati_num(pv_s)
+            tv = _rati_num(tv_s)
+
+            rec = ProductRecord(extraction_method="text")
+            rec.product_code = code
+            rec.ean          = ean
+            if desc_raw:
+                rec.product_name = desc_raw
+            rec.quantity     = qty_s
+            if pv:
+                rec.price = pv + " EUR"
+            if tv:
+                rec.total_price = tv + " EUR"
+            records.append(rec)
+            logger.info("Rati text: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
+                        code, ean, desc_raw[:40] if desc_raw else "", qty_s, pv, tv)
+            i = j
+        else:
+            i += 1
+
+    logger.info("Rati text extraction: %d records", len(records))
+    return records
+
+
+def extract_rati_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Rati: %d table(s) received", len(tables))
+    for table in tables:
+        recs = _parse_rati_table(table)
+        if recs:
+            logger.info("Rati table extraction: %d records", len(recs))
+            return recs
+    logger.info("Rati: table yielded nothing, trying text fallback")
+    return _parse_rati_text(text)
+
+
 class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
@@ -6694,6 +6901,14 @@ class FieldMapper:
             records = extract_slime_products(tables, text)
             if records:
                 logger.info("Extraction method: Slime (%d records)", len(records))
+                return records
+
+        # Step 0z4 — Rati KFT (explicit selection or auto-detection)
+        if supplier == "rati" or (supplier == "auto" and _is_rati_document(text)):
+            _specific_tried = True
+            records = extract_rati_products(tables, text)
+            if records:
+                logger.info("Extraction method: Rati (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back

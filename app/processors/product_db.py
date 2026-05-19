@@ -968,3 +968,14 @@ def get_xado_db(data_dir: str) -> SupplierNameDatabase:
         _xado_db = SupplierNameDatabase(data_dir, "xado-products.xlsx")
         _xado_db.load()
     return _xado_db
+
+
+_rati_db: Optional[SupplierNameDatabase] = None
+
+
+def get_rati_db(data_dir: str) -> SupplierNameDatabase:
+    global _rati_db
+    if _rati_db is None:
+        _rati_db = SupplierNameDatabase(data_dir, "rati-products.xlsx")
+        _rati_db.load()
+    return _rati_db
