@@ -6585,12 +6585,13 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
     records = []
     logger.info("Rati text fallback — first 800 chars:\n%s", repr(text[:800]))
 
+    # Primary: position number + code + qty pcs/db + price + total on one line
     _RATI_LINE_RE = re.compile(
-        r'(\d+)\s+'
-        r'([A-Z]\d{3,7}[A-Z]?\d*)\s+'
-        r'(\d+)\s*pcs\s*/\s*db\s+'
-        r'([\d.]+)\s+'
-        r'([\d.]+)',
+        r'(?:\d+\s+)?'                   # optional position number
+        r'([A-Z]\d{3,7}[A-Z]?\d*)\s+'   # product code (V01945B)
+        r'(\d+)\s*pcs\s*/\s*db\s+'       # quantity
+        r'([\d.]+)\s+'                   # unit price
+        r'([\d.]+)',                     # total net
         re.IGNORECASE
     )
 
@@ -6598,15 +6599,15 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        m = _RATI_LINE_RE.match(line)
+        m = _RATI_LINE_RE.search(line)
         if m:
-            _pos, code, qty_s, pv_s, tv_s = m.groups()
+            code, qty_s, pv_s, tv_s = m.groups()
             ean = None
             desc_lines = []
             j = i + 1
-            while j < len(lines) and j < i + 6:
+            while j < len(lines) and j < i + 8:
                 nxt = lines[j].strip()
-                if _RATI_LINE_RE.match(nxt):
+                if _RATI_LINE_RE.search(nxt):
                     break
                 ean_m = _RATI_EAN_RE.match(nxt)
                 if ean_m:
