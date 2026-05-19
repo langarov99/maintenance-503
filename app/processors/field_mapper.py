@@ -5810,7 +5810,7 @@ def _parse_aromati_table(table: list[list]) -> list[ProductRecord]:
             desc_idx  = _find(["описание", "description", "артикул", "наименование"])
             qty_idx   = _find(["кол", "qty", "количество"])
             price_idx = _find(["цена", "price"])
-            total_idx = _find(["стойност", "total", "amount", "сума"])
+            total_idx = _find(["стойност", "total", "amount", "сума", "общо"])
             break
 
     if header_idx is None:
@@ -5827,25 +5827,45 @@ def _parse_aromati_table(table: list[list]) -> list[ProductRecord]:
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip() if idx is not None and idx < len(row) else ""
 
         desc = cell(desc_idx)
-        if not desc or re.search(r'общо|total|словом|данък|ддс|vat|получател', desc.lower()):
+        if not desc or re.search(r'словом|данък|ддс|vat|получател', desc.lower()):
             continue
 
         qty_raw   = cell(qty_idx)
         qty_clean = re.sub(r'\s*[A-ZА-Яa-zа-я]+\.?\s*$', '', qty_raw).strip()
+        qty_n = None
+        if qty_clean:
+            try:
+                qty_n = int(float(qty_clean.replace(',', '.')))
+            except ValueError:
+                pass
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = re.sub(r'\s+', ' ', desc).upper()
-        if qty_clean:
-            rec.quantity = qty_clean
+        if qty_n is not None:
+            rec.quantity = str(qty_n)
         pv = _areon_num(cell(price_idx))
+        tv = _areon_num(cell(total_idx))
+
+        # Derive missing total or price from the other when qty is known
+        if qty_n and qty_n > 0:
+            if pv and not tv:
+                try:
+                    tv = f"{float(pv) * qty_n:.2f}"
+                except ValueError:
+                    pass
+            elif tv and not pv:
+                try:
+                    pv = f"{float(tv) / qty_n:.2f}"
+                except (ValueError, ZeroDivisionError):
+                    pass
+
         if pv:
             rec.price = pv + " EUR"
-        tv = _areon_num(cell(total_idx))
         if tv:
             rec.total_price = tv + " EUR"
 
         records.append(rec)
-        logger.info("Aromati table: desc=%s qty=%s price=%s total=%s", desc[:50], qty_clean, pv, tv)
+        logger.info("Aromati table: desc=%s qty=%s price=%s total=%s", desc[:50], qty_n, pv, tv)
 
     return records
 

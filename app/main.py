@@ -389,9 +389,9 @@ async def extract(
             _LAT_TO_CYR = {
                 ord('A'): 'А', ord('B'): 'В', ord('C'): 'С', ord('E'): 'Е',
                 ord('H'): 'Н', ord('K'): 'К', ord('M'): 'М', ord('O'): 'О',
-                ord('P'): 'Р', ord('T'): 'Т', ord('X'): 'Х',
+                ord('P'): 'Р', ord('R'): 'Р', ord('T'): 'Т', ord('X'): 'Х',
                 ord('a'): 'а', ord('c'): 'с', ord('e'): 'е', ord('o'): 'о',
-                ord('p'): 'р', ord('x'): 'х',
+                ord('p'): 'р', ord('r'): 'р', ord('x'): 'х',
             }
 
             def _areon_norm(s: str) -> str:
