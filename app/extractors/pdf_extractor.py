@@ -7,6 +7,32 @@ from .image_extractor import ImageExtractor
 
 logger = logging.getLogger(__name__)
 
+def _add_win_dll_dirs():
+    """Add site-packages to DLL search path on Windows (needed for WinPython + PyMuPDF)."""
+    import sys, os
+    if sys.platform != 'win32':
+        return
+    try:
+        import site
+        for sp in site.getsitepackages():
+            if os.path.isdir(sp):
+                try:
+                    os.add_dll_directory(sp)
+                except Exception:
+                    pass
+        py_dir = os.path.dirname(sys.executable)
+        for d in [py_dir, os.path.join(py_dir, 'DLLs')]:
+            if os.path.isdir(d):
+                try:
+                    os.add_dll_directory(d)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+_add_win_dll_dirs()
+
 try:
     import fitz  # PyMuPDF (legacy import name)
     _FITZ_AVAILABLE = True

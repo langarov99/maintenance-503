@@ -6590,6 +6590,8 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
        "V01945B"  ...  "2 pcs / db  52.40  104.80"
     """
     records = []
+    # Normalize common OCR misreadings before parsing
+    text = text.replace('¥', 'V').replace('Ÿ', 'V').replace('У', 'V')
     logger.info("Rati text fallback — first 1500 chars:\n%s", repr(text[:1500]))
 
     _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*)\b')
