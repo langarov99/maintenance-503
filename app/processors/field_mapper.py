@@ -6591,7 +6591,11 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
     """
     records = []
     # Normalize common OCR misreadings before parsing
-    text = text.replace('¥', 'V').replace('Ÿ', 'V').replace('У', 'V')
+    text = (text
+            .replace('¥', 'V').replace('Ÿ', 'V').replace('У', 'V')
+            .replace('рcs', 'pcs')   # Cyrillic р misread as Latin p before "cs"
+            .replace('рс', 'pc')     # Cyrillic рс misread as pc
+            )
     logger.info("Rati text fallback — first 1500 chars:\n%s", repr(text[:1500]))
 
     _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*)\b')
@@ -6626,26 +6630,31 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
         if qty_s is None:
             continue  # no qty found near this code — not a product row
 
-        # Collect EAN and description from lines between code and qty line
+        # Mark code line and qty line as used
+        used.add(i)
+        if qty_line_idx != i:
+            used.add(qty_line_idx)
+
+        # Collect EAN and description from lines after the code line
         ean = None
         desc_lines = []
-        end = qty_line_idx if qty_line_idx is not None else i + 6
-        for k in range(i, end + 1):
-            if k >= len(lines):
-                break
-            used.add(k)
+        scan_end = max(qty_line_idx, i) + 5
+        for k in range(i + 1, min(scan_end + 1, len(lines))):
             kl = lines[k].strip()
-            if k == i:
-                # Same line as code — skip the code itself, keep any trailing text
-                after_code = line_s[code_m.end():].strip()
-                # Don't re-parse qty line as description
-                if after_code and not _RATI_QTY_PRICE_RE.search(after_code):
-                    pass  # nothing useful after code on same line normally
+            if not kl:
                 continue
+            # Stop if we hit another product code line
+            if _RATI_CODE_ONLY_RE.search(kl) and _RATI_QTY_PRICE_RE.search(kl):
+                break
+            # Skip the qty/price line itself
+            if _RATI_QTY_PRICE_RE.search(kl):
+                used.add(k)
+                continue
+            used.add(k)
             ean_m = _RATI_EAN_RE.match(kl)
             if ean_m:
                 ean = ean_m.group(1)
-            elif kl and not re.match(r'^\d+$', kl) and not _RATI_QTY_PRICE_RE.search(kl):
+            elif not re.match(r'^\d+$', kl) and not re.match(r'^[\d\s.]+$', kl):
                 desc_lines.append(kl)
 
         desc_raw = " ".join(desc_lines).strip()
@@ -6670,6 +6679,10 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
                     code, ean, desc_raw[:40] if desc_raw else "", qty_s, pv, tv)
 
     logger.info("Rati text extraction: %d records", len(records))
+    # Log unmatched lines with qty pattern to help diagnose missed products
+    for j, ln in enumerate(lines):
+        if j not in used and _RATI_QTY_PRICE_RE.search(ln.strip()):
+            logger.debug("Rati unmatched qty line %d: %s", j, repr(ln.strip()))
     return records
 
 
