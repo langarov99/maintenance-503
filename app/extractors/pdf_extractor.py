@@ -8,10 +8,14 @@ from .image_extractor import ImageExtractor
 logger = logging.getLogger(__name__)
 
 try:
-    import fitz  # PyMuPDF
+    import fitz  # PyMuPDF (legacy import name)
     _FITZ_AVAILABLE = True
 except Exception:
-    _FITZ_AVAILABLE = False
+    try:
+        import pymupdf as fitz  # PyMuPDF >= 1.24 new import name
+        _FITZ_AVAILABLE = True
+    except Exception:
+        _FITZ_AVAILABLE = False
 
 
 def _is_cid_garbage(text: str) -> bool:
