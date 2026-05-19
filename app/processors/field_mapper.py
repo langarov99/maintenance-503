@@ -6596,7 +6596,7 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
             .replace('рcs', 'pcs')   # Cyrillic р misread as Latin p before "cs"
             .replace('рс', 'pc')     # Cyrillic рс misread as pc
             )
-    logger.info("Rati text fallback — first 1500 chars:\n%s", repr(text[:1500]))
+    logger.info("Rati text fallback — full OCR text (%d chars):\n%s", len(text), text)
 
     _RATI_CODE_ONLY_RE = re.compile(r'\b([A-Z]\d{3,7}[A-Z]?\d*)\b')
     _RATI_QTY_PRICE_RE = re.compile(
@@ -6682,7 +6682,7 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
     # Log unmatched lines with qty pattern to help diagnose missed products
     for j, ln in enumerate(lines):
         if j not in used and _RATI_QTY_PRICE_RE.search(ln.strip()):
-            logger.debug("Rati unmatched qty line %d: %s", j, repr(ln.strip()))
+            logger.info("Rati unmatched qty line %d: %s", j, repr(ln.strip()))
     return records
 
 
