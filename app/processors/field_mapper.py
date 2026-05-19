@@ -5606,14 +5606,13 @@ def _areon_num(s: str) -> str | None:
 # Matches a product row in extracted text:
 # <pos> <DESCRIPTION> <qty> БР <price> EUR <per> БР <total> EUR [optional suffix]
 _AREON_ROW_RE = re.compile(
-    # qty has NO space before БР ("10БР"); per DOES have space ("1 БР") — use this to split
-    r'(\d+)\s+'           # position number
-    r'([А-ЯA-Z][^\n]*?)'  # description (lazy, no newlines)
-    r'\s+(\d+)БР\s+'      # qty immediately followed by БР
-    r'([\d,.]+)\s+EUR\s+' # unit price
-    r'\d+\s+БР\s+'        # per (ignored)
-    r'([\d,.]+)\s+EUR'    # total
-    r'([ \t][^\n]*)?',    # optional description suffix on same line (e.g. "ЧЕР.ВАНИЛИЯ")
+    r'(\d+)\s+'             # position number
+    r'([А-ЯA-Z][^\n\r]*?)'  # description (lazy, no newlines)
+    r'\s+(\d+)\s*БР\s+'     # qty + БР (space before БР optional)
+    r'([\d,.]+)\s+EUR\s+'   # unit price
+    r'\d+\s*БР\s+'          # per (ignored, space before БР optional)
+    r'([\d,.]+)\s+EUR'      # total
+    r'([ \t][^\n\r]*)?',    # optional description suffix on same line (e.g. "ЧЕР.ВАНИЛИЯ")
     re.IGNORECASE,
 )
 
@@ -5626,7 +5625,8 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
 
     for i, row in enumerate(table):
         joined = " ".join(str(c or "").lower() for c in row)
-        if re.search(r'поз|poz', joined) and re.search(r'описание|description', joined):
+        logger.debug("Areon table row %d: %s", i, joined[:120])
+        if re.search(r'поз|poz|№|no\.', joined) and re.search(r'описание|description|артикул|наименование', joined):
             header_idx = i
             headers = [str(c or "").lower().strip() for c in row]
 
@@ -5638,13 +5638,15 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
                 return None
 
             poz_idx   = _find(["поз", "poz", "no.", "№"])
-            desc_idx  = _find(["описание", "description", "артикул"])
-            qty_idx   = _find(["кол", "qty"])
+            desc_idx  = _find(["описание", "description", "артикул", "наименование"])
+            qty_idx   = _find(["кол", "qty", "количество"])
             price_idx = _find(["цена", "price"])
-            total_idx = _find(["стойност", "total", "amount"])
+            total_idx = _find(["стойност", "total", "amount", "сума"])
             break
 
     if header_idx is None:
+        logger.warning("Areon table: no header row found — rows: %s",
+                       [" ".join(str(c or "")[:20] for c in r) for r in table[:5]])
         return []
 
     logger.info("Areon table header at row %d: poz=%s desc=%s qty=%s price=%s total=%s",
@@ -5682,7 +5684,7 @@ def _parse_areon_table(table: list[list]) -> list[ProductRecord]:
 def _parse_areon_text(text: str) -> list[ProductRecord]:
     """Text-based fallback when pdfplumber cannot split Areon table columns."""
     records = []
-    logger.info("Areon text fallback — first 500 chars:\n%s", repr(text[:500]))
+    logger.info("Areon text fallback — first 1500 chars:\n%s", repr(text[:1500]))
 
     matches = list(_AREON_ROW_RE.finditer(text))
     for i, m in enumerate(matches):
