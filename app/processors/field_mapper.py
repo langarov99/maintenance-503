@@ -6448,6 +6448,167 @@ def extract_slime_products(tables: list, text: str = "") -> list[ProductRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Bomar (БОМАР БЪЛГАРИЯ ООД — Bulgarian importer of Turtle Wax / car care)
+# Invoice format: Bulgarian accounting system table
+# Columns: №, Баркод, Код, Стока, Мярка, Кол-во, Кр.цена, Сума
+# ---------------------------------------------------------------------------
+
+def _is_bomar_document(text: str) -> bool:
+    return bool(re.search(r'бомар\s+българия|bomar\s+bulgar', text, re.IGNORECASE))
+
+
+def _bomar_num(s: str) -> str | None:
+    """Parse a numeric cell from a Bomar invoice (may contain € sign)."""
+    s = (s or "").strip().replace('€', '').replace('\xa0', '').replace(' ', '').replace(',', '.')
+    m = re.search(r'\d+\.\d+|\d+', s)
+    if m:
+        try:
+            return f"{float(m.group()):.2f}"
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_bomar_table(table: list[list]) -> list[ProductRecord]:
+    """Parse one pdfplumber table from a Бомар България invoice.
+
+    Expected columns: №, Баркод, Код, Стока, Мярка, Кол-во, Кр.цена, Сума
+    """
+    if not table or len(table) < 2:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(table):
+        joined = " ".join(str(c or "").lower() for c in row)
+        if "баркод" in joined or ("стока" in joined and "код" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    headers = [str(c or "").lower().strip() for c in table[header_idx]]
+    logger.debug("Bomar table headers: %s", headers)
+
+    def find(kws):
+        for kw in kws:
+            for idx, h in enumerate(headers):
+                if kw in h:
+                    return idx
+        return None
+
+    ean_idx   = find(["баркод", "barcode", "ean"])
+    code_idx  = find(["код"])
+    desc_idx  = find(["стока", "описание", "наименование"])
+    qty_idx   = find(["кол-во", "кол.", "qty", "количество"])
+    price_idx = find(["кр.цена", "кр. цена", "цена"])
+    total_idx = find(["сума", "total", "стойност"])
+
+    logger.info("Bomar table header at row %d: ean=%s code=%s desc=%s qty=%s price=%s total=%s",
+                header_idx, ean_idx, code_idx, desc_idx, qty_idx, price_idx, total_idx)
+
+    records = []
+    for row in table[header_idx + 1:]:
+        def cell(ci):
+            if ci is None or ci >= len(row):
+                return ""
+            return re.sub(r'\s+', ' ', str(row[ci] or "")).strip()
+
+        code = cell(code_idx)
+        if not code or not re.match(r'^[A-Z]{2}\d+', code):
+            continue  # skip totals, headers, empty rows
+
+        desc = cell(desc_idx)
+        if not desc:
+            continue
+
+        ean_raw = cell(ean_idx)
+        ean = ean_raw if re.match(r'^\d{8,14}$', ean_raw) else None
+
+        qty_raw = cell(qty_idx)
+        qty_m = re.search(r'\d+', qty_raw)
+        qty = qty_m.group() if qty_m else None
+
+        price = _bomar_num(cell(price_idx))
+        total = _bomar_num(cell(total_idx))
+
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = desc
+        if ean:
+            rec.ean = ean
+        if qty:
+            rec.quantity = qty
+        if price:
+            rec.price = price + " EUR"
+        if total:
+            rec.total_price = total + " EUR"
+
+        records.append(rec)
+        logger.info("Bomar table: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
+                    code, ean, desc[:50], qty, price, total)
+
+    return records
+
+
+# Text-based fallback for Bomar (when pdfplumber cannot split table columns).
+# Row format: <pos> [<ean>] <FGcode> <description...> БРОЙ <qty> <unit_price> <total>€
+_BOMAR_ROW_RE = re.compile(
+    r'^\s*(\d+)\s+'            # position number
+    r'(?:(\d{8,14})\s+)?'      # optional EAN barcode
+    r'([A-Z]{2}\d+)\s+'        # product code (e.g. FG7638)
+    r'(.+?)\s+'                # description (lazy)
+    r'(?:БРОЙ|брой|бр\.?)\s+'  # unit of measure
+    r'(\d+)\s+'                # quantity
+    r'([\d.,]+)\s+'            # unit price
+    r'([\d.,]+)€?',            # total amount
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _parse_bomar_text(text: str) -> list[ProductRecord]:
+    """Text-based fallback when pdfplumber cannot split Bomar table columns."""
+    logger.info("Bomar text fallback — first 500 chars:\n%s", repr(text[:500]))
+    records = []
+    for m in _BOMAR_ROW_RE.finditer(text):
+        pos, ean_raw, code, desc, qty_raw, price_raw, total_raw = m.groups()
+        desc = re.sub(r'\s+', ' ', desc).strip()
+        ean = ean_raw if ean_raw and re.match(r'^\d{8,14}$', ean_raw) else None
+        price = _bomar_num(price_raw)
+        total = _bomar_num(total_raw)
+
+        rec = ProductRecord(extraction_method="text")
+        rec.product_code = code
+        rec.product_name = desc
+        if ean:
+            rec.ean = ean
+        rec.quantity = qty_raw.strip()
+        if price:
+            rec.price = price + " EUR"
+        if total:
+            rec.total_price = total + " EUR"
+
+        records.append(rec)
+        logger.info("Bomar text: code=%s ean=%s desc=%s qty=%s price=%s total=%s",
+                    code, ean, desc[:50], qty_raw, price, total)
+
+    return records
+
+
+def extract_bomar_products(tables: list, text: str = "") -> list[ProductRecord]:
+    logger.info("Bomar: %d table(s) received", len(tables))
+    records: list[ProductRecord] = []
+    for table in tables:
+        records.extend(_parse_bomar_table(table))
+
+    if not records:
+        logger.info("Bomar: table extraction yielded nothing, trying text fallback")
+        records = _parse_bomar_text(text)
+
+    logger.info("Bomar extraction: %d records", len(records))
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Rati (RATI KFT — Hungarian car accessories supplier)
 # Invoice format: multi-row per product in "Part No" column:
 #   Line 0: product code (e.g. V01945B)
@@ -6967,6 +7128,13 @@ class FieldMapper:
             records = extract_rati_products(tables, text)
             if records:
                 logger.info("Extraction method: Rati (%d records)", len(records))
+                return records
+
+        if supplier == "bomar" or (supplier == "auto" and _is_bomar_document(text)):
+            _specific_tried = True
+            records = extract_bomar_products(tables, text)
+            if records:
+                logger.info("Extraction method: Bomar (%d records)", len(records))
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
