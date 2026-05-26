@@ -56,10 +56,15 @@ _find_tesseract()
 
 
 def _preprocess(img: Image.Image) -> Image.Image:
-    """Upscale + enhance contrast to improve Tesseract accuracy on scanned invoices."""
+    """Upscale + enhance contrast to improve Tesseract accuracy on scanned invoices.
+
+    Target: ≥3200 px wide so Tesseract has enough pixels per character.
+    At 300 DPI an A4 page is ~2480 px — still below the ideal Tesseract target,
+    so we upscale it to ~3200 px (scale ×2 for low-res, ×1.3 for 300-DPI sources).
+    """
     w, h = img.size
-    if w < 2000:
-        scale = max(2, 2400 // max(w, 1))
+    if w < 3200:
+        scale = max(2, 3200 // max(w, 1))
         img = img.resize((w * scale, h * scale), Image.LANCZOS)
     img = img.convert("L")
     img = ImageEnhance.Contrast(img).enhance(1.8)
@@ -90,8 +95,8 @@ def _otsu_threshold(img: Image.Image) -> int:
 def _preprocess_binary(img: Image.Image) -> Image.Image:
     """Hard Otsu binarization — better for dense table grids and faint ink."""
     w, h = img.size
-    if w < 2000:
-        scale = max(2, 2400 // max(w, 1))
+    if w < 3200:
+        scale = max(2, 3200 // max(w, 1))
         img = img.resize((w * scale, h * scale), Image.LANCZOS)
     img = img.convert("L")
     img = ImageEnhance.Contrast(img).enhance(2.5)

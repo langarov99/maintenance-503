@@ -167,7 +167,9 @@ class PDFExtractor:
         doc = fitz.open(file_path)
         all_text = []
         for page in doc:
-            pix = page.get_pixmap(dpi=200)
+            # 300 DPI gives Tesseract the ideal pixel density for accurate OCR
+            # (A4 at 300 DPI → ~2480×3508 px; real rendering detail, not upscaled)
+            pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
             result = self.image_extractor.extract_from_pil(img)
             all_text.append(result["text"])
@@ -181,7 +183,7 @@ class PDFExtractor:
             all_text = []
             with pdfplumber.open(file_path) as pdf:
                 for page in pdf.pages:
-                    img = page.to_image(resolution=200).original
+                    img = page.to_image(resolution=300).original
                     result = self.image_extractor.extract_from_pil(img)
                     all_text.append(result["text"])
             return "\n".join(all_text)
