@@ -979,3 +979,59 @@ def get_rati_db(data_dir: str) -> SupplierNameDatabase:
         _rati_db = SupplierNameDatabase(data_dir, "rati-products.xlsx")
         _rati_db.load()
     return _rati_db
+
+
+# ---------------------------------------------------------------------------
+# Bomar (БОМАР БЪЛГАРИЯ ООД — Turtle Wax / car care importer)
+# bomar-products.xlsx  : Код | Описание eShop
+# bomar-barcodes.xlsx  : Артикул (код) | Съответствие номер  (EAN)
+# ---------------------------------------------------------------------------
+
+_bomar_db: Optional[SupplierNameDatabase] = None
+
+
+def get_bomar_db(data_dir: str) -> SupplierNameDatabase:
+    global _bomar_db
+    if _bomar_db is None:
+        _bomar_db = SupplierNameDatabase(
+            data_dir, "bomar-products.xlsx",
+            desc_keywords=["описание", "description", "name"],
+        )
+        _bomar_db.load()
+    return _bomar_db
+
+
+_bomar_barcode_map: Optional[dict] = None
+
+
+def get_bomar_barcode_map(data_dir: str) -> dict:
+    """Return {code_upper: ean_str} from bomar-barcodes.xlsx."""
+    global _bomar_barcode_map
+    if _bomar_barcode_map is not None:
+        return _bomar_barcode_map
+    _bomar_barcode_map = {}
+    path = Path(data_dir) / "bomar-barcodes.xlsx"
+    if not path.exists():
+        logger.info("Bomar barcode file not found (optional): %s", path)
+        return _bomar_barcode_map
+    try:
+        df = pd.read_excel(path, engine="openpyxl", header=0, dtype=str)
+        df = df.fillna("")
+        headers = [str(c).lower().strip() for c in df.columns]
+        code_idx = ProductDatabase._find_col(
+            headers, ["артикул", "код", "code", "article"]
+        ) or 0
+        ean_idx = ProductDatabase._find_col(
+            headers, ["съответствие", "баркод", "barcode", "ean", "gtin"]
+        ) or 1
+        col_code = df.columns[code_idx]
+        col_ean  = df.columns[ean_idx]
+        for _, row in df.iterrows():
+            code = str(row[col_code]).strip()
+            ean  = str(row[col_ean]).strip()
+            if code and re.match(r'^\d{8,14}$', ean):
+                _bomar_barcode_map[code.upper()] = ean
+        logger.info("Bomar barcode map loaded: %d entries", len(_bomar_barcode_map))
+    except Exception as e:
+        logger.error("Failed to load bomar-barcodes.xlsx: %s", e)
+    return _bomar_barcode_map
