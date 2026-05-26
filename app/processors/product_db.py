@@ -978,9 +978,13 @@ def get_rati_db(data_dir: str) -> SupplierNameDatabase:
     if _rati_db is None:
         _rati_db = SupplierNameDatabase(data_dir, "rati-products.xlsx")
         _rati_db.load()
-        # Rati uses both M and V prefixes for the same product series
-        # (e.g. catalog has V01884A, invoice ships M01884A).
-        # Add aliases so both prefixes resolve to the same entry.
+        # Safety net: Rati catalog uses ONLY V-prefix codes, but OCR on the
+        # custom-font invoice PDF sometimes produces M-prefix codes (e.g. M01884A)
+        # because Tesseract misreads the V glyph as Cyrillic М, which the
+        # _CYR_CODE_MAP in field_mapper then converts to Latin M.
+        # The primary fix is in _parse_rati_text() (M→V correction) and in main.py
+        # (canonical code update after enrichment).  These aliases are a fallback
+        # so that any M-codes that still slip through still match the catalog.
         _extra = {}
         for code, info in list(_rati_db._by_code.items()):
             if code.startswith('V'):

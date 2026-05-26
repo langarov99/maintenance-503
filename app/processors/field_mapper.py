@@ -6796,6 +6796,16 @@ def _parse_rati_text(text: str) -> list[ProductRecord]:
             continue
         code = code_m.group(1)
 
+        # Rati codes always start with V (e.g. V01884A, V01946C) or are all-letter
+        # freight codes (e.g. FUVB2BEU).  OCR running on the custom-font PDF often
+        # misreads the V glyph as Cyrillic М; _CYR_CODE_MAP then converts М→M,
+        # producing wrong codes like M01884A.  Correct M<digits>... back to V<digits>...
+        # since Rati never uses M-prefix product codes.
+        if code.startswith('M') and len(code) > 3 and code[1:2].isdigit():
+            corrected = 'V' + code[1:]
+            logger.debug("Rati: M→V prefix correction: %s → %s", code, corrected)
+            code = corrected
+
         # Look for qty+prices on this line OR within the next 6 lines
         qty_s = pv_s = tv_s = None
         qty_line_idx = None

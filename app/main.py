@@ -635,6 +635,14 @@ async def extract(
                         if info.description:
                             rec.product_name = info.description
                             enriched_n += 1
+                        # Rati: always update product_code to the catalog's canonical code.
+                        # This corrects any remaining OCR prefix errors (e.g. M01884A → V01884A)
+                        # that slipped through the field_mapper normalization.
+                        if _name_supplier == "rati" and info.internal_code:
+                            if rec.product_code != info.internal_code:
+                                logger.debug("Rati: canonical code fix %s → %s",
+                                             rec.product_code, info.internal_code)
+                                rec.product_code = info.internal_code
                     elif _name_supplier == "wunder_baum" and rec.is_new_product:
                         not_found.append(rec.product_code or "(empty)")
                 if enriched_n:
