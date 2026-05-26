@@ -18,9 +18,6 @@ COLUMNS = [
     ("Нов продукт",             "is_new_product",  14),
     ("Име на продукта",         "product_name",    40),
     ("EAN / Баркод",            "ean",             18),
-    ("Килограми (бруто/нето)",  "weight_kg",       22),
-    ("Брой/части в комплект",   "parts_in_set",    20),
-    ("Цвят",                    "color",           16),
 ]
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
