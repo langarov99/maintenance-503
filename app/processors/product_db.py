@@ -978,6 +978,21 @@ def get_rati_db(data_dir: str) -> SupplierNameDatabase:
     if _rati_db is None:
         _rati_db = SupplierNameDatabase(data_dir, "rati-products.xlsx")
         _rati_db.load()
+        # Rati uses both M and V prefixes for the same product series
+        # (e.g. catalog has V01884A, invoice ships M01884A).
+        # Add aliases so both prefixes resolve to the same entry.
+        _extra = {}
+        for code, info in list(_rati_db._by_code.items()):
+            if code.startswith('V'):
+                alt = 'M' + code[1:]
+                if alt not in _rati_db._by_code and info.description:
+                    _extra[alt] = info
+            elif code.startswith('M'):
+                alt = 'V' + code[1:]
+                if alt not in _rati_db._by_code and info.description:
+                    _extra[alt] = info
+        _rati_db._by_code.update(_extra)
+        logger.info("rati: added %d M↔V prefix aliases", len(_extra))
     return _rati_db
 
 
