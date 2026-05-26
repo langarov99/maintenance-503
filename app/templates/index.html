@@ -170,8 +170,12 @@
       text-align: left; font-weight: 600; white-space: nowrap;
     }
     tbody tr:nth-child(even) { background: #f5f5f5; }
+    tbody tr.new-product { background: #fff8e1 !important; }
+    tbody tr.new-product td { border-bottom: 1px solid #ffe082; }
     tbody td { padding: 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
     tbody td:empty::after { content: "—"; color: #bbb; }
+    .badge-new { display: inline-block; background: #ff9800; color: #fff;
+                 border-radius: 4px; padding: 1px 7px; font-size: .75rem; font-weight: 700; }
 
     .alert { padding: 12px 16px; border-radius: 8px; font-size: .9rem; margin-top: 12px; }
     .alert-error { background: #fde8e8; color: #8b0000; border-left: 4px solid #CC0000; }
@@ -447,6 +451,7 @@
       const [pVal, pCur]    = splitVal(rec.price);
       const [tVal, tCur]    = splitVal(rec.total_price);
       const tr = document.createElement('tr');
+      if (rec.is_new_product) tr.classList.add('new-product');
       tr.innerHTML = `<td>${idx+1}</td>`
         + `<td>${rec.product_code || ''}</td>`
         + `<td>${qNum}</td>`
@@ -455,7 +460,7 @@
         + `<td>${pCur}</td>`
         + `<td>${tVal}</td>`
         + `<td>${tCur}</td>`
-        + `<td>${rec.is_new_product ? 'Да' : 'Не'}</td>`
+        + `<td>${rec.is_new_product ? '<span class="badge-new">Нов</span>' : 'Не'}</td>`
         + `<td>${rec.product_name || ''}</td>`
         + `<td>${rec.ean || ''}</td>`
       resultBody.appendChild(tr);

@@ -20,12 +20,13 @@ COLUMNS = [
     ("EAN / Баркод",            "ean",             18),
 ]
 
-HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
-HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
-ALT_FILL   = PatternFill("solid", fgColor="D6E4F0")
-BORDER_SIDE = Side(style="thin", color="BFBFBF")
-CELL_BORDER = Border(left=BORDER_SIDE, right=BORDER_SIDE,
-                     top=BORDER_SIDE, bottom=BORDER_SIDE)
+HEADER_FILL  = PatternFill("solid", fgColor="1F4E79")
+HEADER_FONT  = Font(bold=True, color="FFFFFF", size=11)
+ALT_FILL     = PatternFill("solid", fgColor="D6E4F0")
+NEW_PROD_FILL= PatternFill("solid", fgColor="FFF8E1")  # light amber — new product row
+BORDER_SIDE  = Side(style="thin", color="BFBFBF")
+CELL_BORDER  = Border(left=BORDER_SIDE, right=BORDER_SIDE,
+                      top=BORDER_SIDE, bottom=BORDER_SIDE)
 
 
 def _split(raw: str):
@@ -109,7 +110,11 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
 
     # Data rows
     for row_idx, rec in enumerate(records, start=2):
-        fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
+        # New products get amber highlight; others get alternating blue/white
+        if rec.is_new_product:
+            fill = NEW_PROD_FILL
+        else:
+            fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
         for col_idx, (_, field_name, _) in enumerate(active_cols, start=1):
             value = _get_value(rec, field_name)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
