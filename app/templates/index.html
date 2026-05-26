@@ -481,7 +481,13 @@
 
     currentOutputFile = data.output_file;
     resultsCard.style.display = 'block';
-    showAlert(data.message, 'success');
+    if (data.warning) {
+      alertBox.innerHTML =
+        `<div class="alert alert-success">${data.message}</div>`
+        + `<div class="alert alert-warning" style="background:#fff3cd;color:#856404;border-left:4px solid #ffc107;margin-top:8px;">${data.warning}</div>`;
+    } else {
+      showAlert(data.message, 'success');
+    }
     setTimeout(() => resultsCard.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   }
 

@@ -172,6 +172,8 @@ async def extract(
         mapper = get_mapper()
         records = mapper.map(extracted, supplier=supplier)
         _doc_text = extracted.get("text", "")
+        # Track whether a known supplier was identified
+        _supplier_recognized = supplier != "auto"
 
         if not records:
             return {
@@ -184,6 +186,7 @@ async def extract(
         # Enrich records from product database (OSRAM)
         db = get_product_db(str(DATA_DIR))
         if (supplier == "osram" or (supplier == "auto" and _is_osram_document(_doc_text))) and db.is_loaded:
+            _supplier_recognized = True
             enriched = 0
             for rec in records:
                 am_code = getattr(rec, "_osram_article", None)
@@ -255,6 +258,7 @@ async def extract(
         # Invoice may have P217134 or 217134; catalog may store either form.
         # Use whichever variant is found in the catalog; fall back to GZ-<original>.
         if supplier == "gumarny_zubri" or (supplier == "auto" and _is_gumarny_zubri_document(_doc_text)):
+            _supplier_recognized = True
             gz_name_db = get_gumarny_zubri_db(str(DATA_DIR))
             for rec in records:
                 if not rec.product_code:
@@ -455,6 +459,7 @@ async def extract(
 
         # Slime: enrich product name from supplier DB; found → not new
         if supplier == "slime" or (supplier == "auto" and _is_slime_document(_doc_text)):
+            _supplier_recognized = True
             slime_db = get_slime_db(str(DATA_DIR))
             if slime_db.is_loaded:
                 enriched_n = 0
@@ -472,6 +477,7 @@ async def extract(
 
         # Xado: translate invoice description → internal code via code map, then enrich name
         if supplier == "xado" or (supplier == "auto" and _is_xado_document(_doc_text)):
+            _supplier_recognized = True
             import re as _re
             import pandas as _pd
             _xado_map_path = DATA_DIR / "xado-code-map.xlsx"
@@ -556,6 +562,7 @@ async def extract(
         # Wunder-Baum: translate supplier code → internal code via code map
         _wb_reverse: dict[str, str] = {}  # our_code.upper() → original supplier code
         if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(_doc_text)):
+            _supplier_recognized = True
             wb_map = get_wunder_baum_code_map(str(DATA_DIR))
             if wb_map.is_loaded:
                 mapped_n = 0
@@ -610,11 +617,15 @@ async def extract(
         _name_supplier = supplier
         if supplier == "auto" and _is_rigum_document(_doc_text):
             _name_supplier = "rigum"
+            _supplier_recognized = True
         if supplier == "auto" and _is_bmw_document(_doc_text):
             _name_supplier = "bmw"
+            _supplier_recognized = True
         if supplier == "auto" and _is_wunder_baum_document(_doc_text):
             _name_supplier = "wunder_baum"
+            _supplier_recognized = True
         if _name_supplier in _name_db_map:
+            _supplier_recognized = True
             name_db = _name_db_map[_name_supplier](str(DATA_DIR))
             if name_db.is_loaded:
                 enriched_n = 0
@@ -744,6 +755,11 @@ async def extract(
         _records_cache[Path(out_path).name] = records
 
         text_lines = [l for l in extracted.get("text", "").splitlines() if l.strip()]
+        _warning = None
+        if supplier == "auto" and not _supplier_recognized:
+            _warning = ("⚠️ Производителят не е разпознат. Данните са извлечени с общ алгоритъм "
+                        "и може да са непълни. Моля, изберете производителя ръчно от списъка.")
+            logger.warning("Supplier not recognized — generic extraction only")
         return {
             "success": True,
             "message": f"Успешно извлечени {len(records)} записа.",
@@ -752,6 +768,7 @@ async def extract(
             "extraction_source": extracted.get("source"),
             "text_lines": len(text_lines),
             "supplier": supplier,
+            "warning": _warning,
         }
     finally:
         tmp_path.unlink(missing_ok=True)
