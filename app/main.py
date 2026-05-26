@@ -19,7 +19,20 @@ from .extractors.pdf_extractor import PDFExtractor
 from .extractors.excel_extractor import ExcelExtractor
 from .extractors.text_extractor import TextExtractor
 from .extractors.image_extractor import ImageExtractor
-from .processors.field_mapper import FieldMapper, ProductRecord, _is_osram_document, _is_rigum_document, _is_bmw_document, _is_gumarny_zubri_document, _is_wunder_baum_document, _is_slime_document, _is_xado_document, _is_rati_document, _is_petex_document
+from .processors.field_mapper import (
+    FieldMapper, ProductRecord,
+    _is_osram_document, _is_rigum_document, _is_bmw_document,
+    _is_gumarny_zubri_document, _is_wunder_baum_document,
+    _is_slime_document, _is_xado_document, _is_rati_document,
+    _is_petex_document, _is_rezaw_plast_document, _is_avisa_document,
+    _is_amio_document, _is_maxton_document, _is_mtech_document,
+    _is_mafra_document, _is_car_passion_document, _is_vinove_document,
+    _is_amal_plast_document, _is_frogum_document, _is_gelly_plast_document,
+    _is_farad_document, _is_geyer_hosaja_document, _is_hakr_document,
+    _is_automania_document, _is_kegel_blazusiak_document, _is_tompar_document,
+    _is_senax_document, _is_heko_document, _is_bardahl_document,
+    _is_areon_document, _is_bomar_document,
+)
 from .processors.product_db import get_product_db, get_rezaw_plast_db, get_maxton_db, get_avisa_db, get_amio_db, get_mtech_db, get_mafra_db, get_amal_plast_db, get_car_passion_db, get_vinove_db, get_gumarny_zubri_db, get_rigum_db, get_petex_db, get_geyer_hosaja_db, get_frogum_db, get_gelly_plast_db, get_farad_db, get_farad_code_map, get_kegel_blazusiak_db, get_automania_db, get_hakr_db, get_tompar_db, get_senax_db, get_heko_db, get_bmw_db, get_wunder_baum_db, get_wunder_baum_code_map, get_bardahl_db, get_areon_db, get_areon_code_map, get_slime_db, get_xado_db, get_rati_db, get_bomar_db, get_bomar_barcode_map
 from .output.excel_writer import write_excel
 
@@ -616,14 +629,47 @@ async def extract(
             "bomar":           get_bomar_db,
         }
         _name_supplier = supplier
-        if supplier == "auto" and _is_rigum_document(_doc_text):
-            _name_supplier = "rigum"
-        if supplier == "auto" and _is_bmw_document(_doc_text):
-            _name_supplier = "bmw"
-        if supplier == "auto" and _is_wunder_baum_document(_doc_text):
-            _name_supplier = "wunder_baum"
-        if supplier == "auto" and _is_petex_document(_doc_text):
-            _name_supplier = "petex"
+        if supplier == "auto":
+            # Auto-detect supplier for catalog enrichment.
+            # Order matters: more specific checks first to avoid false matches.
+            _auto_map = [
+                ("osram",            _is_osram_document),
+                ("rezaw_plast",      _is_rezaw_plast_document),
+                ("avisa",            _is_avisa_document),
+                ("amio",             _is_amio_document),
+                ("maxton",           _is_maxton_document),
+                ("mtech",            _is_mtech_document),
+                ("mafra",            _is_mafra_document),
+                ("car_passion",      _is_car_passion_document),
+                ("vinove",           _is_vinove_document),
+                ("amal_plast",       _is_amal_plast_document),
+                ("gumarny_zubri",    _is_gumarny_zubri_document),
+                ("rigum",            _is_rigum_document),
+                ("frogum",           _is_frogum_document),
+                ("petex",            _is_petex_document),
+                ("gelly_plast",      _is_gelly_plast_document),
+                ("farad",            _is_farad_document),
+                ("geyer_hosaja",     _is_geyer_hosaja_document),
+                ("hakr",             _is_hakr_document),
+                ("automania",        _is_automania_document),
+                ("kegel_blazusiak",  _is_kegel_blazusiak_document),
+                ("tompar",           _is_tompar_document),
+                ("sonax",            _is_senax_document),
+                ("team_heko",        _is_heko_document),
+                ("bmw",              _is_bmw_document),
+                ("bardahl",          _is_bardahl_document),
+                ("areon",            _is_areon_document),
+                ("wunder_baum",      _is_wunder_baum_document),
+                ("slime",            _is_slime_document),
+                ("xado",             _is_xado_document),
+                ("rati",             _is_rati_document),
+                ("bomar",            _is_bomar_document),
+            ]
+            for _s, _fn in _auto_map:
+                if _fn(_doc_text):
+                    _name_supplier = _s
+                    logger.info("Auto-detected supplier for enrichment: %s", _s)
+                    break
         if _name_supplier in _name_db_map:
             name_db = _name_db_map[_name_supplier](str(DATA_DIR))
             if name_db.is_loaded:
