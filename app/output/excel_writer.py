@@ -38,12 +38,45 @@ def _split(raw: str):
     return raw.strip(), ""
 
 
-def _get_value(rec: ProductRecord, field_name: str) -> str:
-    if field_name == "quantity_num":   return _split(rec.quantity    or "")[0]
+def _normalize_num(val: str):
+    """Convert European number format to a Python float for Excel.
+
+    Examples:
+      '1.504,25'  → 1504.25   (European: period=thousands, comma=decimal)
+      '1504,25'   → 1504.25   (comma-only decimal)
+      '1504.25'   → 1504.25   (already standard)
+      '1.504'     → 1504.0    (period-only thousands, 3 digits after dot)
+      '10'        → 10.0
+    Returns the original string if conversion fails.
+    """
+    val = val.strip()
+    if not val:
+        return val
+    normalized = val
+    if '.' in val and ',' in val:
+        # European format: 1.504,25 → remove thousands dot, swap decimal comma
+        normalized = val.replace('.', '').replace(',', '.')
+    elif ',' in val:
+        # Comma-only → decimal separator: 1504,25 → 1504.25
+        normalized = val.replace(',', '.')
+    elif '.' in val:
+        parts = val.split('.')
+        # Period-only thousands: 1.504 (exactly 3 digits after single dot, digits before)
+        if len(parts) == 2 and len(parts[1]) == 3 and parts[0].isdigit():
+            normalized = val.replace('.', '')
+        # else already standard decimal: 1504.25 → leave as-is
+    try:
+        return float(normalized)
+    except ValueError:
+        return val  # fallback: return as string
+
+
+def _get_value(rec: ProductRecord, field_name: str):
+    if field_name == "quantity_num":   return _normalize_num(_split(rec.quantity    or "")[0])
     if field_name == "quantity_unit":  return _split(rec.quantity    or "")[1]
-    if field_name == "price_val":      return _split(rec.price       or "")[0]
+    if field_name == "price_val":      return _normalize_num(_split(rec.price       or "")[0])
     if field_name == "price_cur":      return _split(rec.price       or "")[1]
-    if field_name == "total_val":      return _split(rec.total_price or "")[0]
+    if field_name == "total_val":      return _normalize_num(_split(rec.total_price or "")[0])
     if field_name == "total_cur":      return _split(rec.total_price or "")[1]
     if field_name == "is_new_product": return "Да" if rec.is_new_product else "Не"
     return getattr(rec, field_name, None) or ""
