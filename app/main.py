@@ -176,11 +176,16 @@ async def extract(
         _supplier_recognized = supplier != "auto"
 
         if not records:
+            _warning_msg = None
+            if supplier == "auto":
+                _warning_msg = ("⚠️ Производителят не е разпознат и не бяха открити данни. "
+                                "Моля, изберете производителя ръчно от списъка и опитайте отново.")
             return {
                 "success": False,
                 "message": "Не бяха открити данни в документа.",
                 "records": [],
                 "output_file": None,
+                "warning": _warning_msg,
             }
 
         # Enrich records from product database (OSRAM)
@@ -751,7 +756,8 @@ async def extract(
             if len(records) < pre:
                 logger.info("Post-enrichment dedup: %d → %d records", pre, len(records))
 
-        out_path = write_excel(records, str(OUTPUT_DIR), file.filename)
+        out_path = write_excel(records, str(OUTPUT_DIR), file.filename,
+                               supplier_recognized=_supplier_recognized)
         _records_cache[Path(out_path).name] = records
 
         text_lines = [l for l in extracted.get("text", "").splitlines() if l.strip()]

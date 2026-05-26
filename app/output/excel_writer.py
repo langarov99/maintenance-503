@@ -91,7 +91,8 @@ def _apply_header_style(cell):
 
 
 def write_excel(records: list[ProductRecord], output_dir: str, source_filename: str,
-                include_fields: set[str] | None = None) -> str:
+                include_fields: set[str] | None = None,
+                supplier_recognized: bool = True) -> str:
     # Filter active columns
     active_cols = [(h, f, w) for h, f, w in COLUMNS
                    if include_fields is None or f in include_fields]
@@ -134,6 +135,12 @@ def write_excel(records: list[ProductRecord], output_dir: str, source_filename: 
     ws_meta["A4"] = "Метод на извличане"
     methods = list({r.extraction_method for r in records})
     ws_meta["B4"] = ", ".join(methods)
+    ws_meta["A5"] = "Производител"
+    if supplier_recognized:
+        ws_meta["B5"] = "Разпознат"
+    else:
+        ws_meta["B5"] = "⚠️ НЕ Е РАЗПОЗНАТ — данните може да са непълни"
+        ws_meta["B5"].font = Font(bold=True, color="FF8C00")
 
     # Freeze header
     ws.freeze_panes = "A2"

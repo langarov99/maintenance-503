@@ -414,7 +414,14 @@
       progressLabel.textContent = 'Готово!';
 
       if (!resp.ok || !data.success) {
-        showAlert(data.detail || data.message || 'Грешка при обработка.', 'error');
+        const errMsg = data.detail || data.message || 'Грешка при обработка.';
+        if (data.warning) {
+          alertBox.innerHTML =
+            `<div class="alert alert-error">${errMsg}</div>`
+            + `<div class="alert alert-warning" style="background:#fff3cd;color:#856404;border-left:4px solid #ffc107;margin-top:8px;">${data.warning}</div>`;
+        } else {
+          showAlert(errMsg, 'error');
+        }
         return;
       }
 
