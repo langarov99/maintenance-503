@@ -101,14 +101,23 @@ PRODUCT_NAME_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 
 HEADER_ALIASES = {
-    "product_code": ["код", "code", "art", "artikel", "codice", "item", "артикул", "арт", "nr", "no", "référence", "article", "number", "kod"],
-    "quantity":     ["кол", "qty", "quantity", "menge", "anzahl", "quantità", "ilość", "množství", "доставено", "delivered", "geliefert", "consegnato", "поръчано", "ordered", "бр"],
-    "price":        ["цена", "price", "preis", "prezzo", "cena", "prix", "единична цена", "unit price"],
-    "total_price":  ["wartość", "total value", "net value", "gross value", "gesamtwert", "total price", "total amount", "valore totale"],
-    "product_name": ["наименование", "описание", "продукт", "name", "bezeichnung", "nome", "nazwa", "název", "description", "omschrijving", "клиентско", "artikel"],
+    "product_code": ["арт. № дост", "арт.№дост", "арт № дост", "код", "code", "art", "artikel",
+                     "codice", "item", "артикул", "арт", "nr", "no", "référence", "article",
+                     "number", "kod"],
+    "quantity":     ["к-во", "кол-во", "кол", "qty", "quantity", "menge", "anzahl", "quantità",
+                     "ilość", "množství", "доставено", "delivered", "geliefert", "consegnato",
+                     "поръчано", "ordered", "бр"],
+    "price":        ["ед.цена", "ед. цена", "единична цена", "unit price", "цена", "price",
+                     "preis", "prezzo", "cena", "prix"],
+    "total_price":  ["общо", "total", "wartość", "total value", "net value", "gross value",
+                     "gesamtwert", "total price", "total amount", "valore totale"],
+    "product_name": ["наименование", "описание", "продукт", "name", "bezeichnung", "nome",
+                     "nazwa", "název", "description", "omschrijving", "клиентско", "artikel"],
     "ean":          ["ean", "баркод", "barcode", "gtin", "upc", "ean код"],
-    "weight_kg":    ["кг", "kg", "weight", "gewicht", "peso", "waga", "hmotnost", "брутo", "нето", "brutto", "netto", "gross", "net", "тегло"],
-    "parts_in_set": ["единични", "пълни", "pcs", "pieces", "stück", "set", "комплект", "sztuk", "ks", "бр"],
+    "weight_kg":    ["кг", "kg", "weight", "gewicht", "peso", "waga", "hmotnost", "брутo",
+                     "нето", "brutto", "netto", "gross", "net", "тегло"],
+    "parts_in_set": ["единични", "пълни", "pcs", "pieces", "stück", "set", "комплект",
+                     "sztuk", "ks"],
     "color":        ["цвят", "color", "colour", "farbe", "colore", "kolor", "barva"],
 }
 
@@ -6886,6 +6895,83 @@ def extract_rati_products(tables: list, text: str = "") -> list[ProductRecord]:
     return _parse_rati_text(text)
 
 
+# ---------------------------------------------------------------------------
+# Generic Bulgarian invoice text parser
+# Handles the standard Bulgarian ERP invoice format (Microinvest / Акаунт Е):
+#   № | [Арт.№ Клиент] | Арт.№ Дост. | Наименование | МЕ | К-во | Ед.цена | Общо
+# ---------------------------------------------------------------------------
+
+_BG_UNITS = r'(?:брой|бр\.?|кг|л(?:итър)?|м(?:етър)?|к(?:омплект)?|оп\.?|пакет|пак\.?|set|pcs|pc)'
+
+# Row pattern: leading row-number, optional client-art, supplier-art (4-10 digits),
+# description (anything), unit, qty, unit-price, total
+_BG_INV_ROW_RE = re.compile(
+    r'^\s*\d+\s+'                             # row number
+    r'(?:\S+\s+)?'                             # optional client article (skip)
+    r'(\d{4,10})\s+'                           # supplier article → product code
+    r'(.+?)\s+'                                # description (non-greedy)
+    r'(' + _BG_UNITS + r')\s+'                # unit of measure
+    r'(\d+(?:[.,]\d+)?)\s+'                   # quantity
+    r'([\d.,]+)\s+'                            # unit price
+    r'([\d.,]+)\s*$',                          # total
+    re.IGNORECASE,
+)
+
+# Simpler fallback: row-number + code + qty + price + total (no unit / description)
+_BG_INV_SIMPLE_RE = re.compile(
+    r'^\s*\d+\s+'
+    r'(\d{4,10})\s+'
+    r'(.+?)\s+'
+    r'(\d+(?:[.,]\d+)?)\s+'
+    r'([\d.,]+)\s+'
+    r'([\d.,]+)\s*$',
+)
+
+
+def _bg_num(s: str) -> str:
+    """Normalise Bulgarian number: '1.234,56' → '1234.56'."""
+    s = s.strip()
+    if '.' in s and ',' in s:
+        s = s.replace('.', '').replace(',', '.')
+    elif ',' in s:
+        s = s.replace(',', '.')
+    return s
+
+
+def _parse_bulgarian_invoice_text(text: str) -> list[ProductRecord]:
+    """Extract product rows from a standard Bulgarian ERP invoice (text mode)."""
+    records = []
+    for line in text.splitlines():
+        m = _BG_INV_ROW_RE.match(line)
+        if m:
+            code, name, unit, qty, price, total = m.groups()
+            rec = ProductRecord(extraction_method="regex")
+            rec.product_code = code.strip()
+            rec.product_name = name.strip()[:120]
+            rec.quantity     = _bg_num(qty) + " " + unit.strip()
+            rec.price        = _bg_num(price) + " BGN"
+            rec.total_price  = _bg_num(total) + " BGN"
+            records.append(rec)
+            logger.debug("BG invoice row: code=%s qty=%s price=%s total=%s",
+                         code, qty, price, total)
+            continue
+
+        m = _BG_INV_SIMPLE_RE.match(line)
+        if m:
+            code, name, qty, price, total = m.groups()
+            rec = ProductRecord(extraction_method="regex")
+            rec.product_code = code.strip()
+            rec.product_name = name.strip()[:120]
+            rec.quantity     = _bg_num(qty)
+            rec.price        = _bg_num(price) + " BGN"
+            rec.total_price  = _bg_num(total) + " BGN"
+            records.append(rec)
+            logger.debug("BG invoice simple row: code=%s qty=%s price=%s total=%s",
+                         code, qty, price, total)
+
+    return records
+
+
 class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
@@ -7151,7 +7237,7 @@ class FieldMapper:
                 return records
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
-        # to generic table extraction — it would pick up preamble/address rows.
+        # to generic table/text extraction — it would pick up preamble/address rows.
         if _specific_tried:
             logger.info("Specific extractor attempted but returned 0 records — skipping generic fallback")
             return []
@@ -7181,7 +7267,14 @@ class FieldMapper:
                     logger.info("Extraction method: LLM (%d fields found)", llm_rec.filled_count())
                     return [llm_rec]
 
-            # Return partial regex result if LLM unavailable
+            # Step 4 — generic Bulgarian invoice line parser
+            # Handles standard ERP format: № | [client art] | supplier art | name | unit | qty | price | total
+            bg_records = _parse_bulgarian_invoice_text(text)
+            if bg_records:
+                logger.info("Extraction method: generic BG invoice (%d records)", len(bg_records))
+                return bg_records
+
+            # Return partial regex result if nothing better found
             if rec.filled_count() >= 1:
                 return [rec]
 
