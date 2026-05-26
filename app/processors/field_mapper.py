@@ -6975,10 +6975,14 @@ def _parse_bulgarian_invoice_text(text: str) -> list[ProductRecord]:
 class FieldMapper:
     def __init__(self, llm=None):
         self.llm = llm  # Optional llama-cpp-python Llama instance
+        # Set to True after map() whenever a dedicated supplier extractor was attempted.
+        # False only when the generic table/regex/BG-invoice fallback ran.
+        self.last_specific_tried: bool = False
 
     def map(self, extracted: dict, supplier: str = "auto") -> list[ProductRecord]:
         tables = extracted.get("tables", [])
         text = extracted.get("text", "")
+        self.last_specific_tried = False  # reset for this call
 
         logger.info("Extraction requested: supplier=%s", supplier)
 
@@ -6989,7 +6993,7 @@ class FieldMapper:
 
         # Step 0 — OSRAM (explicit selection or auto-detection)
         if supplier == "osram" or (supplier == "auto" and text and _is_osram_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             if text:
                 records = extract_osram_products(text)
                 if records:
@@ -6998,7 +7002,7 @@ class FieldMapper:
 
         # Step 0b — Rezaw-Plast (explicit selection or auto-detection)
         if supplier == "rezaw_plast" or (supplier == "auto" and _is_rezaw_plast_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_rezaw_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Rezaw-Plast (%d records)", len(records))
@@ -7006,7 +7010,7 @@ class FieldMapper:
 
         # Step 0c — Avisa (explicit selection or auto-detection)
         if supplier == "avisa" or (supplier == "auto" and _is_avisa_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_avisa_products(tables, text)
             if records:
                 logger.info("Extraction method: Avisa (%d records)", len(records))
@@ -7014,7 +7018,7 @@ class FieldMapper:
 
         # Step 0d — Amio (explicit selection or auto-detection)
         if supplier == "amio" or (supplier == "auto" and _is_amio_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_amio_products(tables, text)
             if records:
                 logger.info("Extraction method: Amio (%d records)", len(records))
@@ -7022,7 +7026,7 @@ class FieldMapper:
 
         # Step 0e — Maxton Design (explicit selection or auto-detection)
         if supplier == "maxton_design" or (supplier == "auto" and _is_maxton_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_maxton_products(tables, text)
             if records:
                 logger.info("Extraction method: Maxton Design (%d records)", len(records))
@@ -7030,7 +7034,7 @@ class FieldMapper:
 
         # Step 0f — M-Tech Poland (explicit selection or auto-detection)
         if supplier == "mtech" or (supplier == "auto" and _is_mtech_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_mtech_products(tables, text)
             if records:
                 logger.info("Extraction method: M-Tech (%d records)", len(records))
@@ -7039,7 +7043,7 @@ class FieldMapper:
         # Step 0g — Ma*Fra / Авиатранс (explicit selection or auto-detection)
         text2 = extracted.get("text2", "")
         if supplier == "mafra" or (supplier == "auto" and (_is_mafra_document(text) or _is_mafra_document(text2))):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_mafra_products(tables, text, text2)
             if records:
                 logger.info("Extraction method: Ma*Fra (%d records)", len(records))
@@ -7047,7 +7051,7 @@ class FieldMapper:
 
         # Step 0h — Amal-Plast (explicit selection or auto-detection)
         if supplier == "amal_plast" or (supplier == "auto" and _is_amal_plast_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_amal_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Amal-Plast (%d records)", len(records))
@@ -7055,7 +7059,7 @@ class FieldMapper:
 
         # Step 0i — Car Passion (explicit selection or auto-detection)
         if supplier == "car_passion" or (supplier == "auto" and _is_car_passion_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_car_passion_products(tables, text)
             if records:
                 logger.info("Extraction method: Car Passion (%d records)", len(records))
@@ -7063,7 +7067,7 @@ class FieldMapper:
 
         # Step 0j — Vinove (explicit selection or auto-detection)
         if supplier == "vinove" or (supplier == "auto" and _is_vinove_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_vinove_products(tables, text)
             if records:
                 logger.info("Extraction method: Vinove (%d records)", len(records))
@@ -7071,7 +7075,7 @@ class FieldMapper:
 
         # Step 0k — Gumarny Zubri (explicit selection or auto-detection)
         if supplier == "gumarny_zubri" or (supplier == "auto" and _is_gumarny_zubri_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_gumarny_zubri_products(tables, text)
             if records:
                 logger.info("Extraction method: Gumarny Zubri (%d records)", len(records))
@@ -7079,7 +7083,7 @@ class FieldMapper:
 
         # Step 0l — Rigum (explicit selection or auto-detection)
         if supplier == "rigum" or (supplier == "auto" and _is_rigum_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_rigum_products(tables, text)
             if records:
                 logger.info("Extraction method: Rigum (%d records)", len(records))
@@ -7087,7 +7091,7 @@ class FieldMapper:
 
         # Step 0m — Frogum (explicit selection or auto-detection)
         if supplier == "frogum" or (supplier == "auto" and _is_frogum_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_frogum_products(tables, text)
             if records:
                 logger.info("Extraction method: Frogum (%d records)", len(records))
@@ -7095,7 +7099,7 @@ class FieldMapper:
 
         # Step 0n — Petex (explicit selection or auto-detection)
         if supplier == "petex" or (supplier == "auto" and _is_petex_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_petex_products(tables, text)
             if records:
                 logger.info("Extraction method: Petex (%d records)", len(records))
@@ -7103,7 +7107,7 @@ class FieldMapper:
 
         # Step 0o — Gelly Plast (explicit selection or auto-detection)
         if supplier == "gelly_plast" or (supplier == "auto" and _is_gelly_plast_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_gelly_plast_products(tables, text)
             if records:
                 logger.info("Extraction method: Gelly Plast (%d records)", len(records))
@@ -7111,7 +7115,7 @@ class FieldMapper:
 
         # Step 0p — Farad / Evolution SRL (explicit selection or auto-detection)
         if supplier == "farad" or (supplier == "auto" and _is_farad_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_farad_products(tables, text)
             if records:
                 logger.info("Extraction method: Farad (%d records)", len(records))
@@ -7119,7 +7123,7 @@ class FieldMapper:
 
         # Step 0n — Geyer & Hosaja (explicit selection or auto-detection)
         if supplier == "geter_hosaja" or (supplier == "auto" and _is_geyer_hosaja_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_geyer_hosaja_products(tables, text)
             if records:
                 logger.info("Extraction method: Geyer & Hosaja (%d records)", len(records))
@@ -7127,7 +7131,7 @@ class FieldMapper:
 
         # Step 0r — Hakr / ASN HAKR Brno (explicit selection or auto-detection)
         if supplier == "hakr" or (supplier == "auto" and _is_hakr_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_hakr_products(tables, text)
             if records:
                 logger.info("Extraction method: Hakr (%d records)", len(records))
@@ -7135,7 +7139,7 @@ class FieldMapper:
 
         # Step 0s — AutoMania (explicit selection or auto-detection)
         if supplier == "automania" or (supplier == "auto" and _is_automania_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_automania_products(tables, text)
             if records:
                 logger.info("Extraction method: AutoMania (%d records)", len(records))
@@ -7143,7 +7147,7 @@ class FieldMapper:
 
         # Step 0q — Kegel-Błażusiak (explicit selection or auto-detection)
         if supplier == "kegel_blazusiak" or (supplier == "auto" and _is_kegel_blazusiak_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_kegel_blazusiak_products(tables, text)
             if records:
                 logger.info("Extraction method: Kegel-Blazusiak (%d records)", len(records))
@@ -7151,7 +7155,7 @@ class FieldMapper:
 
         # Step 0t — ToM-PaR (explicit selection or auto-detection)
         if supplier == "tompar" or (supplier == "auto" and _is_tompar_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_tompar_products(tables, text)
             if records:
                 logger.info("Extraction method: ToM-PaR (%d records)", len(records))
@@ -7159,7 +7163,7 @@ class FieldMapper:
 
         # Step 0u — Sonax / Сенакс ООД (explicit selection or auto-detection)
         if supplier == "sonax" or (supplier == "auto" and _is_senax_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_senax_products(tables, text)
             if records:
                 logger.info("Extraction method: Sonax (%d records)", len(records))
@@ -7167,7 +7171,7 @@ class FieldMapper:
 
         # Step 0v — Heko / Team Heko (explicit selection or auto-detection)
         if supplier == "team_heko" or (supplier == "auto" and _is_heko_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_heko_products(tables, text)
             if records:
                 logger.info("Extraction method: Heko (%d records)", len(records))
@@ -7175,7 +7179,7 @@ class FieldMapper:
 
         # Step 0w — BMW Group / BMW Service (explicit selection or auto-detection)
         if supplier == "bmw" or (supplier == "auto" and _is_bmw_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_bmw_products(tables, text)
             if records:
                 logger.info("Extraction method: BMW (%d records)", len(records))
@@ -7183,7 +7187,7 @@ class FieldMapper:
 
         # Step 0y — Bardahl / ProSpeed (explicit selection or auto-detection)
         if supplier == "bardahl" or (supplier == "auto" and _is_bardahl_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_bardahl_products(tables, text)
             if records:
                 logger.info("Extraction method: Bardahl (%d records)", len(records))
@@ -7191,7 +7195,7 @@ class FieldMapper:
 
         # Step 0x — Wunder-Baum (explicit selection or auto-detection)
         if supplier == "wunder_baum" or (supplier == "auto" and _is_wunder_baum_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_wunder_baum_products(tables, text)
             if records:
                 logger.info("Extraction method: Wunder-Baum (%d records)", len(records))
@@ -7199,7 +7203,7 @@ class FieldMapper:
 
         # Step 0z — Areon (explicit selection or auto-detection)
         if supplier == "areon" or (supplier == "auto" and _is_areon_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_areon_products(tables, text)
             if records:
                 logger.info("Extraction method: Areon (%d records)", len(records))
@@ -7207,7 +7211,7 @@ class FieldMapper:
 
         # Step 0z2 — Xado / Tuning Oils Club (explicit selection or auto-detection)
         if supplier == "xado" or (supplier == "auto" and _is_xado_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_xado_products(tables, text)
             if records:
                 logger.info("Extraction method: Xado (%d records)", len(records))
@@ -7215,7 +7219,7 @@ class FieldMapper:
 
         # Step 0z3 — Slime / ITW Global Tire Repair (explicit selection or auto-detection)
         if supplier == "slime" or (supplier == "auto" and _is_slime_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_slime_products(tables, text)
             if records:
                 logger.info("Extraction method: Slime (%d records)", len(records))
@@ -7223,14 +7227,14 @@ class FieldMapper:
 
         # Step 0z4 — Rati KFT (explicit selection or auto-detection)
         if supplier == "rati" or (supplier == "auto" and _is_rati_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_rati_products(tables, text)
             if records:
                 logger.info("Extraction method: Rati (%d records)", len(records))
                 return records
 
         if supplier == "bomar" or (supplier == "auto" and _is_bomar_document(text)):
-            _specific_tried = True
+            _specific_tried = self.last_specific_tried = True
             records = extract_bomar_products(tables, text)
             if records:
                 logger.info("Extraction method: Bomar (%d records)", len(records))
@@ -7238,6 +7242,7 @@ class FieldMapper:
 
         # If a dedicated extractor was attempted but returned 0, do NOT fall back
         # to generic table/text extraction — it would pick up preamble/address rows.
+        self.last_specific_tried = _specific_tried
         if _specific_tried:
             logger.info("Specific extractor attempted but returned 0 records — skipping generic fallback")
             return []
