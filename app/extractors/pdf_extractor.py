@@ -55,6 +55,15 @@ def _is_cid_garbage(text: str) -> bool:
     return cid_hits > 10 and cid_hits * 7 > len(text) * 0.3
 
 
+def _is_control_char_garbage(text: str) -> bool:
+    """Return True when text is full of control characters (PyMuPDF rendering
+    of undecodable custom-encoded fonts — chars 0x01-0x1F except \\t \\n \\r)."""
+    if not text or len(text) < 20:
+        return False
+    ctrl = sum(1 for c in text if ord(c) < 32 and c not in '\t\n\r')
+    return ctrl > 10 and ctrl / len(text) > 0.15
+
+
 class PDFExtractor:
     def __init__(self, ocr_languages: list[str] = None):
         self.ocr_languages = ocr_languages or ["bg", "en"]
@@ -74,7 +83,7 @@ class PDFExtractor:
             # pdfplumber produced garbage — try PyMuPDF text first
             if _FITZ_AVAILABLE:
                 fitz_text = self._extract_text_via_fitz(file_path)
-                if fitz_text.strip() and not _is_cid_garbage(fitz_text):
+                if fitz_text.strip() and not _is_cid_garbage(fitz_text) and not _is_control_char_garbage(fitz_text):
                     logger.info("CID garbage detected — switched to PyMuPDF text")
                     text   = fitz_text
                     source = "text_fitz"
