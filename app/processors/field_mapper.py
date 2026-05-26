@@ -6497,7 +6497,10 @@ def _parse_bomar_table(table: list[list]) -> list[ProductRecord]:
         return None
 
     ean_idx   = find(["баркод", "barcode", "ean"])
-    code_idx  = find(["код"])
+    # Use exact match for "код" to avoid matching "баркод" (which contains "код")
+    code_idx  = next((idx for idx, h in enumerate(headers) if h == "код"), None)
+    if code_idx is None:
+        code_idx = find(["код"])
     desc_idx  = find(["стока", "описание", "наименование"])
     qty_idx   = find(["кол-во", "кол.", "qty", "количество"])
     price_idx = find(["кр.цена", "кр. цена", "цена"])
