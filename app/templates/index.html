@@ -277,9 +277,6 @@
             <label><input type="checkbox" value="is_new_product"> Нов продукт</label>
             <label><input type="checkbox" value="product_name"> Име на продукта</label>
             <label><input type="checkbox" value="ean"> EAN / Баркод</label>
-            <label><input type="checkbox" value="weight_kg"> Кг (бруто/нето)</label>
-            <label><input type="checkbox" value="parts_in_set"> Бр. в комплект</label>
-            <label><input type="checkbox" value="color"> Цвят</label>
           </div>
         </div>
         <button id="downloadBtn">&#11015; Свали Excel</button>
@@ -299,9 +296,6 @@
               <th>Нов продукт</th>
               <th>Име на продукта</th>
               <th>EAN / Баркод</th>
-              <th>Кг (бруто/нето)</th>
-              <th>Бр. в комплект</th>
-              <th>Цвят</th>
             </tr>
           </thead>
           <tbody id="resultBody"></tbody>
@@ -464,9 +458,6 @@
         + `<td>${rec.is_new_product ? 'Да' : 'Не'}</td>`
         + `<td>${rec.product_name || ''}</td>`
         + `<td>${rec.ean || ''}</td>`
-        + `<td>${rec.weight_kg || ''}</td>`
-        + `<td>${rec.parts_in_set || ''}</td>`
-        + `<td>${rec.color || ''}</td>`;
       resultBody.appendChild(tr);
     });
 
@@ -505,9 +496,6 @@
     'is_new_product':['is_new_product'],
     'product_name':  ['product_name'],
     'ean':           ['ean'],
-    'weight_kg':     ['weight_kg'],
-    'parts_in_set':  ['parts_in_set'],
-    'color':         ['color'],
   };
 
   downloadBtn.addEventListener('click', () => {
