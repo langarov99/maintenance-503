@@ -39,6 +39,8 @@ from .output.excel_writer import write_excel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+APP_VERSION = "1.2"
+
 BASE_DIR = Path(__file__).parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -154,7 +156,7 @@ async def _start_heartbeat_monitor():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "version": APP_VERSION})
 
 
 @app.post("/extract")
