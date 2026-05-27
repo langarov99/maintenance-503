@@ -161,6 +161,13 @@
       transition: opacity .2s;
     }
     #downloadBtn:hover { opacity: .88; }
+    #downloadNewBtn {
+      width: 100%; padding: 13px; background: #e65100; color: #fff;
+      border: none; border-radius: 6px; font-weight: 700; cursor: pointer;
+      font-size: 1rem; letter-spacing: .5px; margin-top: 10px;
+      transition: opacity .2s; display: none;
+    }
+    #downloadNewBtn:hover { opacity: .88; }
 
     /* Table */
     .table-wrap { overflow-x: auto; border-radius: 8px; }
@@ -288,6 +295,7 @@
           </div>
         </div>
         <button id="downloadBtn">&#11015; Свали Excel</button>
+        <button id="downloadNewBtn">&#11015; Свали само нови продукти (Excel)</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -323,6 +331,7 @@
   const progressLabel = document.getElementById('progressLabel');
   const alertBox = document.getElementById('alertBox');
   const downloadBtn = document.getElementById('downloadBtn');
+  const downloadNewBtn = document.getElementById('downloadNewBtn');
   const methodBadge = document.getElementById('methodBadge');
   const columnSelector = document.getElementById('columnSelector');
 
@@ -491,6 +500,14 @@
     }
 
     currentOutputFile = data.output_file;
+    // Show "new only" button only when there are new products
+    const newCount = data.records.filter(r => r.is_new_product).length;
+    if (newCount > 0) {
+      downloadNewBtn.textContent = `⬇ Свали само нови продукти (${newCount} бр.) — Excel`;
+      downloadNewBtn.style.display = 'block';
+    } else {
+      downloadNewBtn.style.display = 'none';
+    }
     resultsCard.style.display = 'block';
     if (data.warning) {
       alertBox.innerHTML =
@@ -519,6 +536,14 @@
     'product_name':  ['product_name'],
     'ean':           ['ean'],
   };
+
+  downloadNewBtn.addEventListener('click', () => {
+    if (!currentOutputFile) return;
+    const a = document.createElement('a');
+    a.href = '/download-new-only/' + encodeURIComponent(currentOutputFile);
+    a.download = currentOutputFile.replace('_extracted_', '_new_only_');
+    a.click();
+  });
 
   downloadBtn.addEventListener('click', () => {
     if (!currentOutputFile) return;

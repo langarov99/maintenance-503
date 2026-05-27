@@ -834,6 +834,30 @@ async def download(filename: str):
     )
 
 
+@app.get("/download-new-only/{filename}")
+async def download_new_only(filename: str):
+    """Download an Excel file containing only new (unrecognized) products."""
+    records = _records_cache.get(filename)
+    if not records:
+        raise HTTPException(404, "Записите не са намерени. Моля, направете ново извличане.")
+    new_records = [r for r in records if r.is_new_product]
+    if not new_records:
+        raise HTTPException(404, "Няма нови продукти за изтегляне.")
+    stem = Path(filename).stem
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        out_path = await loop.run_in_executor(
+            pool, lambda: write_excel(new_records, str(OUTPUT_DIR),
+                                      f"new_only_{stem}")
+        )
+    out_file = Path(out_path)
+    return FileResponse(
+        path=str(out_file),
+        filename=out_file.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @app.get("/download-custom/{filename}")
 async def download_custom(filename: str, fields: str = Query(...)):
     records = _records_cache.get(filename)
