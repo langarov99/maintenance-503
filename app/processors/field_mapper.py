@@ -5599,7 +5599,12 @@ def extract_xado_products(tables: list, text: str = "") -> list[ProductRecord]:
 # ---------------------------------------------------------------------------
 
 def _is_areon_document(text: str) -> bool:
-    return bool(re.search(r'ареон\s+българия|аромати\s+българия|areon\s+car\s+perfume', text, re.IGNORECASE))
+    return bool(re.search(
+        r'ареон\s+българия|аромати\s+българия|areon\s+car\s+perfume'
+        r'|ареон\s+(?:еоод|оод|ад|bulgaria)'
+        r'|\bareon\s+(?:bulgaria|eood|ood)\b'
+        r'|\bareon\b',
+        text, re.IGNORECASE))
 
 
 def _areon_num(s: str) -> str | None:
