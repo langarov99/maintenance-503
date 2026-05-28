@@ -39,7 +39,7 @@ from .output.excel_writer import write_excel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "3.8"
+APP_VERSION = "3.9"
 
 BASE_DIR = Path(__file__).parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
