@@ -42,9 +42,14 @@ logger = logging.getLogger(__name__)
 def _read_version() -> str:
     _vf = Path(__file__).parent.parent / "updates" / "version.txt"
     try:
-        return _vf.read_text(encoding="utf-8").strip()
+        import re as _re
+        for line in _vf.read_text(encoding="utf-8").splitlines():
+            m = _re.match(r'^\s*(\d+\.\d+)\s*$', line)
+            if m:
+                return m.group(1)
     except Exception:
-        return "4.0"
+        pass
+    return "4.0"
 
 APP_VERSION = _read_version()
 
