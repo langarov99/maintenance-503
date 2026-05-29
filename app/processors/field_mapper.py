@@ -1125,6 +1125,7 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
                 desc_idx, qty_idx, price_idx, value_idx)
 
     records = []
+    _debug_rows = 0
     for row in table[header_idx + 1:]:
         if not any(str(c or "").strip() for c in row):
             continue
@@ -1133,6 +1134,11 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
             if idx is None or idx >= len(row):
                 return ""
             return str(row[idx] or "").strip()
+
+        if _debug_rows < 3:
+            logger.info("Maxton data row[%d] len=%d: %s", _debug_rows, len(row),
+                        [str(c or "")[:20] for c in row])
+            _debug_rows += 1
 
         raw_desc = cell(desc_idx)
         if not raw_desc:
