@@ -1125,7 +1125,6 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
                 desc_idx, qty_idx, price_idx, value_idx)
 
     records = []
-    _debug_rows = 0
     for row in table[header_idx + 1:]:
         if not any(str(c or "").strip() for c in row):
             continue
@@ -1133,12 +1132,7 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         def cell(idx):
             if idx is None or idx >= len(row):
                 return ""
-            return str(row[idx] or "").strip()
-
-        if _debug_rows < 3:
-            logger.info("Maxton data row[%d] len=%d: %s", _debug_rows, len(row),
-                        [str(c or "")[:20] for c in row])
-            _debug_rows += 1
+            return str(row[idx] or "").replace('\xa0', ' ').strip()
 
         raw_desc = cell(desc_idx)
         if not raw_desc:
@@ -1165,7 +1159,13 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         if name:
             rec.product_name = name[:120]
 
-        qty_raw = cell(qty_idx) if qty_idx is not None else ""
+        # Quantity: try detected index and ±1 neighbors (header/data column shift)
+        qty_raw = ""
+        for qi in ([qty_idx] if qty_idx is not None else []) + [10, 9, 11, 8]:
+            v = cell(qi)
+            if v and re.match(r'^\d+([.,]\d+)?$', v):
+                qty_raw = v
+                break
         if qty_raw:
             try:
                 qty_f = float(qty_raw.replace(",", "."))
@@ -1175,26 +1175,33 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
                 rec.quantity = qty_raw
 
         def _eur_val(raw):
+            """Parse a numeric string to '1234.56 EUR', rounding float precision."""
             raw = raw.replace(" ", "").replace("\xa0", "")
-            if re.match(r'^\d+[.,]\d+$', raw):
-                return raw.replace(",", ".") + " EUR"
+            if re.match(r'^\d+[.,]\d+$', raw) or re.match(r'^\d+$', raw):
+                try:
+                    return f"{round(float(raw.replace(',', '.')), 2):.2f} EUR"
+                except ValueError:
+                    pass
             return None
 
-        price_raw = cell(price_idx) if price_idx is not None else ""
-        if price_raw:
-            v = _eur_val(price_raw)
-            if v:
-                rec.price = v
+        # Monetary values: scan row right-to-left to find total then price
+        # (avoids hardcoded index offsets for different proforma/invoice layouts)
+        _nums = []
+        for ci in range(len(row) - 1, -1, -1):
+            v = str(row[ci] or "").replace('\xa0', ' ').strip()
+            if v and re.match(r'^\d[\d.,]*$', v):
+                try:
+                    fv = float(v.replace(',', '.'))
+                    if fv > 0:
+                        _nums.append(v)
+                except ValueError:
+                    pass
 
-        value_raw = cell(value_idx)
-        if value_raw and value_raw != price_raw:
-            v = _eur_val(value_raw)
-            if v:
-                rec.total_price = v
-        elif value_raw and not rec.price:
-            v = _eur_val(value_raw)
-            if v:
-                rec.price = v
+        if len(_nums) >= 2:
+            rec.total_price = _eur_val(_nums[0])   # rightmost  = total
+            rec.price       = _eur_val(_nums[1])   # next right = unit price
+        elif len(_nums) == 1:
+            rec.total_price = _eur_val(_nums[0])
 
         records.append(rec)
 
