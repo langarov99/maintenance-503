@@ -1420,10 +1420,21 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
                 seen_codes.add(rec.product_code)
                 records.append(rec)
 
-    # Fallback to text-based extraction if tables yielded nothing
     if not records and text:
         logger.info("Maxton: no table records — trying text extraction")
         records = _parse_maxton_from_text(text)
+    elif text:
+        # Supplement: text may catch products missed by table extraction
+        # (e.g. Excel merged cells, continuation rows with empty desc column)
+        text_records = _parse_maxton_from_text(text)
+        added = 0
+        for rec in text_records:
+            if rec.product_code not in seen_codes:
+                seen_codes.add(rec.product_code)
+                records.append(rec)
+                added += 1
+        if added:
+            logger.info("Maxton: text supplement added %d missing records", added)
 
     logger.info("Maxton Design extraction: %d records total", len(records))
     return records
