@@ -1092,15 +1092,37 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
                     return i
         return None
 
+    def find_last(kws):
+        """Return the LAST column index matching any keyword (for rightmost EUR col)."""
+        result = None
+        for kw in kws:
+            for i, h in enumerate(headers):
+                if kw in h:
+                    result = i
+        return result
+
     desc_idx  = find(["nazwa towaru", "product name", "nazwa", "product"])
     qty_idx   = find(["ilosc", "qty", "quantity"])
-    value_idx = find(["wartosc netto", "value eur", "wartosc", "value"])
+    # Proforma uses '[eur]' headers; invoice uses 'wartosc netto' / 'value'
+    # Two [eur] cols: first = unit price, last = total value
+    price_idx = find(["cena netto", "unit price", "cena", "[eur]", "eur"])
+    value_idx = find_last(["wartosc netto", "value eur", "wartosc", "value", "[eur]", "eur"])
+    # If both found the same column (only one [eur] col), clear price_idx
+    if price_idx is not None and price_idx == value_idx:
+        price_idx = None
     if value_idx is None:
-        value_idx = len(headers) - 1  # fallback: last column
+        # Last resort: rightmost non-empty column in header
+        for i in range(len(headers) - 1, -1, -1):
+            if headers[i].strip():
+                value_idx = i
+                break
 
     if desc_idx is None:
         # Fallback: scan rows directly for Maxton product code pattern
         desc_idx = 0
+
+    logger.info("Maxton cols — desc=%s qty=%s price=%s total=%s",
+                desc_idx, qty_idx, price_idx, value_idx)
 
     records = []
     for row in table[header_idx + 1:]:
@@ -1146,9 +1168,27 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
             except ValueError:
                 rec.quantity = qty_raw
 
+        def _eur_val(raw):
+            raw = raw.replace(" ", "").replace("\xa0", "")
+            if re.match(r'^\d+[.,]\d+$', raw):
+                return raw.replace(",", ".") + " EUR"
+            return None
+
+        price_raw = cell(price_idx) if price_idx is not None else ""
+        if price_raw:
+            v = _eur_val(price_raw)
+            if v:
+                rec.price = v
+
         value_raw = cell(value_idx)
-        if value_raw and re.match(r'^\d+[.,]\d+$', value_raw):
-            rec.price = value_raw.replace(",", ".") + " EUR"
+        if value_raw and value_raw != price_raw:
+            v = _eur_val(value_raw)
+            if v:
+                rec.total_price = v
+        elif value_raw and not rec.price:
+            v = _eur_val(value_raw)
+            if v:
+                rec.price = v
 
         records.append(rec)
 
