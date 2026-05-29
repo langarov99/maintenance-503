@@ -1256,7 +1256,7 @@ def _split_merged_maxton_lines(lines: list[str]) -> list[str]:
 def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
     """Text-based fallback when pdfplumber finds no usable tables."""
     records: list[ProductRecord] = []
-    seen: dict[str, int] = {}  # code → index in records (for duplicate merging)
+    seen: dict[str, int] = {}  # kept for shipping-row dedup only (not product merging)
     lines = _split_merged_maxton_lines(text.splitlines())
     i = 0
     while i < len(lines):
@@ -1352,29 +1352,14 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         logger.info("Maxton code=%s qty=%s price=%s total=%s | search: %s",
                     code, quantity, price, total_price, search_text[:160])
 
-        if code in seen:
-            # Merge duplicate: add quantities and total prices, keep unit price
-            existing = records[seen[code]]
-            if quantity and existing.quantity:
-                existing_n = int(re.search(r'\d+', existing.quantity).group())
-                new_n      = int(re.search(r'\d+', quantity).group())
-                merged_n   = existing_n + new_n
-                existing.quantity = f"{merged_n} {'Брой' if merged_n == 1 else 'Броя'}"
-            if total_price and existing.total_price:
-                ep = float(existing.total_price.replace(' EUR', '').replace(',', '.'))
-                np = float(total_price.replace(' EUR', '').replace(',', '.'))
-                existing.total_price = f"{ep + np:.2f} EUR"
-            logger.info("Maxton: merged duplicate %s → qty=%s total=%s",
-                        code, existing.quantity, existing.total_price)
-        else:
-            rec = ProductRecord(extraction_method="table")
-            rec.product_code = code
-            rec.product_name = name[:120] if name else None
-            rec.quantity     = quantity
-            rec.price        = price
-            rec.total_price  = total_price
-            seen[code]       = len(records)
-            records.append(rec)
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name[:120] if name else None
+        rec.quantity     = quantity
+        rec.price        = price
+        rec.total_price  = total_price
+        seen[code]       = len(records)
+        records.append(rec)
 
         i = j  # skip past already-consumed extra lines
 
@@ -1413,24 +1398,20 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
 def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Maxton Design: %d table(s) received", len(tables))
     records = []
-    seen_codes: set[str] = set()
     for table in tables:
-        for rec in _parse_maxton_table(table):
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
-                records.append(rec)
+        records.extend(_parse_maxton_table(table))
 
     if not records and text:
         logger.info("Maxton: no table records — trying text extraction")
         records = _parse_maxton_from_text(text)
     elif text:
-        # Supplement: text may catch products missed by table extraction
-        # (e.g. Excel merged cells, continuation rows with empty desc column)
+        # Supplement: text may catch product codes absent from the table entirely
+        table_codes: set[str] = {r.product_code for r in records}
         text_records = _parse_maxton_from_text(text)
         added = 0
         for rec in text_records:
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
+            if rec.product_code not in table_codes:
+                table_codes.add(rec.product_code)
                 records.append(rec)
                 added += 1
         if added:
