@@ -7,3 +7,5 @@ uploads/
 /output/
 models/
 *.gguf
+updates/*.zip
+updates/last_exported_commit.txt
