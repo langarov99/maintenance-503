@@ -1352,14 +1352,32 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
         logger.info("Maxton code=%s qty=%s price=%s total=%s | search: %s",
                     code, quantity, price, total_price, search_text[:160])
 
-        rec = ProductRecord(extraction_method="table")
-        rec.product_code = code
-        rec.product_name = name[:120] if name else None
-        rec.quantity     = quantity
-        rec.price        = price
-        rec.total_price  = total_price
-        seen[code]       = len(records)
-        records.append(rec)
+        if code in seen:
+            existing = records[seen[code]]
+            if quantity and existing.quantity:
+                try:
+                    en = int(re.search(r'\d+', existing.quantity).group())
+                    nn = int(re.search(r'\d+', quantity).group())
+                    mn = en + nn
+                    existing.quantity = f"{mn} {'Брой' if mn == 1 else 'Броя'}"
+                except Exception:
+                    pass
+            if total_price and existing.total_price:
+                try:
+                    ep = float(existing.total_price.replace(' EUR', '').replace(',', '.'))
+                    np = float(total_price.replace(' EUR', '').replace(',', '.'))
+                    existing.total_price = f"{ep + np:.2f} EUR"
+                except Exception:
+                    pass
+        else:
+            rec = ProductRecord(extraction_method="table")
+            rec.product_code = code
+            rec.product_name = name[:120] if name else None
+            rec.quantity     = quantity
+            rec.price        = price
+            rec.total_price  = total_price
+            seen[code]       = len(records)
+            records.append(rec)
 
         i = j  # skip past already-consumed extra lines
 
@@ -1397,21 +1415,48 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
 
 def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Maxton Design: %d table(s) received", len(tables))
-    records = []
+    records: list[ProductRecord] = []
+    seen_codes: dict[str, int] = {}  # code → index in records (for merging)
+
+    def _merge_or_add(rec: ProductRecord):
+        code = rec.product_code
+        if code in seen_codes:
+            existing = records[seen_codes[code]]
+            # Sum quantities
+            if rec.quantity and existing.quantity:
+                try:
+                    en = int(re.search(r'\d+', existing.quantity).group())
+                    nn = int(re.search(r'\d+', rec.quantity).group())
+                    mn = en + nn
+                    existing.quantity = f"{mn} {'Брой' if mn == 1 else 'Броя'}"
+                except Exception:
+                    pass
+            # Sum totals
+            if rec.total_price and existing.total_price:
+                try:
+                    ep = float(existing.total_price.replace(' EUR', '').replace(',', '.'))
+                    np = float(rec.total_price.replace(' EUR', '').replace(',', '.'))
+                    existing.total_price = f"{ep + np:.2f} EUR"
+                except Exception:
+                    pass
+        else:
+            seen_codes[code] = len(records)
+            records.append(rec)
+
     for table in tables:
-        records.extend(_parse_maxton_table(table))
+        for rec in _parse_maxton_table(table):
+            _merge_or_add(rec)
 
     if not records and text:
         logger.info("Maxton: no table records — trying text extraction")
         records = _parse_maxton_from_text(text)
     elif text:
-        # Supplement: text may catch product codes absent from the table entirely
-        table_codes: set[str] = {r.product_code for r in records}
+        # Supplement: add codes completely absent from the table
         text_records = _parse_maxton_from_text(text)
         added = 0
         for rec in text_records:
-            if rec.product_code not in table_codes:
-                table_codes.add(rec.product_code)
+            if rec.product_code not in seen_codes:
+                seen_codes[rec.product_code] = len(records)
                 records.append(rec)
                 added += 1
         if added:
