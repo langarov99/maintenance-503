@@ -820,15 +820,26 @@ async def extract(
             _warning = ("⚠️ Производителят не е разпознат. Данните са извлечени с общ алгоритъм "
                         "и може да са непълни. Моля, изберете производителя ръчно от списъка.")
             logger.warning("Supplier not recognized — generic extraction only")
+
+        _exported = len(records)
+        _total_in_invoice = sum(getattr(r, 'merged_count', 1) for r in records)
+        _new_count = sum(1 for r in records if r.is_new_product)
         return {
             "success": True,
-            "message": f"Успешно извлечени {len(records)} записа.",
+            "message": f"Успешно извлечени {_exported} записа.",
             "records": [r.to_dict() for r in records],
             "output_file": Path(out_path).name,
             "extraction_source": extracted.get("source"),
             "text_lines": len(text_lines),
             "supplier": supplier,
             "warning": _warning,
+            "stats": {
+                "exported": _exported,
+                "total_in_invoice": _total_in_invoice,
+                "duplicates_merged": _total_in_invoice - _exported,
+                "new_products": _new_count,
+                "known_products": _exported - _new_count,
+            },
         }
     finally:
         tmp_path.unlink(missing_ok=True)

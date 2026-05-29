@@ -187,6 +187,20 @@
     .alert { padding: 12px 16px; border-radius: 8px; font-size: .9rem; margin-top: 12px; }
     .alert-error { background: #fde8e8; color: #8b0000; border-left: 4px solid #CC0000; }
     .alert-success { background: #d4edda; color: #155724; border-left: 4px solid #27ae60; }
+
+    /* Stats bar */
+    #statsBar {
+      display: none; background: #f0f4ff; border: 1px solid #c5d3f0;
+      border-radius: 8px; padding: 10px 16px; margin: 12px 0 4px;
+      font-size: .88rem; color: #1a1a1a; flex-wrap: wrap; gap: 6px 20px;
+      align-items: center;
+    }
+    .stat-item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .stat-num  { font-weight: 700; font-size: 1rem; }
+    .stat-sep  { color: #aaa; }
+    .stat-new  { color: #e65100; }
+    .stat-dup  { color: #6a1b9a; }
+    .stat-ok   { color: #1b5e20; }
   </style>
 </head>
 <body>
@@ -273,6 +287,7 @@
       <div class="result-header">
         <h2>Резултати <span id="methodBadge"></span></h2>
       </div>
+      <div id="statsBar"></div>
       <div class="export-panel">
         <div class="export-panel-title">Формат на експорта</div>
         <div class="export-radio-row">
@@ -321,6 +336,7 @@
   </main>
 
 <script>
+  const statsBar = document.getElementById('statsBar');
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
   const submitBtn = document.getElementById('submitBtn');
@@ -500,6 +516,26 @@
     }
 
     currentOutputFile = data.output_file;
+
+    // Stats bar
+    const st = data.stats || {};
+    const exported   = st.exported   || data.records.length;
+    const total      = st.total_in_invoice || exported;
+    const dupes      = st.duplicates_merged || 0;
+    const newProd    = st.new_products  !== undefined ? st.new_products  : data.records.filter(r=>r.is_new_product).length;
+    const knownProd  = st.known_products !== undefined ? st.known_products : (exported - newProd);
+    let parts = [];
+    parts.push(`<span class="stat-item">&#128203; <span class="stat-num">${total}</span> реда от фактурата</span>`);
+    if (dupes > 0)
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-dup">&#8645; <span class="stat-num">${dupes}</span> обединени дублирани</span>`);
+    if (total !== exported)
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item">&#11015; <span class="stat-num">${exported}</span> реда в експорта</span>`);
+    if (newProd > 0)
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-new">&#9733; <span class="stat-num">${newProd}</span> нови продукта</span>`);
+    parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-ok">&#10003; <span class="stat-num">${knownProd}</span> познати</span>`);
+    statsBar.innerHTML = parts.join(' ');
+    statsBar.style.display = 'flex';
+
     // Show "new only" button only when there are new products
     const newCount = data.records.filter(r => r.is_new_product).length;
     if (newCount > 0) {

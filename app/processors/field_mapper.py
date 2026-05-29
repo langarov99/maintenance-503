@@ -23,6 +23,7 @@ class ProductRecord:
     color: Optional[str] = None             # Колона 9
     is_new_product: bool = True             # Да = не е намерен в каталога на доставчика
     extraction_method: str = "regex"
+    merged_count: int = 1                  # how many invoice rows this record represents
 
     def filled_count(self) -> int:
         fields = [self.product_code, self.quantity, self.price,
@@ -31,7 +32,9 @@ class ProductRecord:
         return sum(1 for f in fields if f and str(f).strip())
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d.pop('merged_count', None)
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -1354,6 +1357,7 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
 
         if code in seen:
             existing = records[seen[code]]
+            existing.merged_count += 1
             if quantity and existing.quantity:
                 try:
                     en = int(re.search(r'\d+', existing.quantity).group())
@@ -1422,6 +1426,7 @@ def extract_maxton_products(tables: list, text: str = "") -> list[ProductRecord]
         code = rec.product_code
         if code in seen_codes:
             existing = records[seen_codes[code]]
+            existing.merged_count += 1
             # Sum quantities
             if rec.quantity and existing.quantity:
                 try:
