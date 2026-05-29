@@ -1154,6 +1154,9 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         if code.lower() in ("lp.", "lp", "nazwa", "no.", "no"):
             continue
 
+        # Normalize: ERP/catalog uses hyphens; proforma may use underscores
+        code = code.replace('_', '-')
+
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
         if name:
@@ -1272,7 +1275,7 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        code = m.group(1)
+        code = m.group(1).replace('_', '-')
 
         # Description: text after the code; strip leading ';' (new invoice format
         # puts code and name in the same cell separated by ';').
