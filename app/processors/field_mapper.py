@@ -3523,6 +3523,12 @@ def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
 
 def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Frogum: %d table(s) received", len(tables))
+    for ti, tbl in enumerate(tables[:5]):
+        for ri, row in enumerate(tbl[:3]):
+            logger.info("Frogum table[%d] row[%d]: %s", ti, ri, [str(c or "")[:40] for c in row])
+    for ln in text.splitlines()[:40]:
+        if ln.strip():
+            logger.info("Frogum text: %r", ln[:120])
 
     table_records: list[ProductRecord] = []
     seen: set[str] = set()
