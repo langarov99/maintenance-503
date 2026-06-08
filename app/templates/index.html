@@ -202,6 +202,7 @@
     .stat-dup  { color: #6a1b9a; }
     .stat-ok   { color: #1b5e20; }
     .stat-val  { color: #0d47a1; font-weight: 600; }
+    img.ico { width:1.15em; height:1.15em; vertical-align:-0.18em; display:inline-block; }
 
     /* ── Mobile responsive ───────────────────────────────────────────── */
     @media (max-width: 600px) {
@@ -240,7 +241,7 @@
 <body>
   <header style="position:relative;">
     <div>
-      <h1>&#128196; Data Extraction Bot
+      <h1><img class="ico" src="/static/emoji/1f4c4.svg" alt="📄"> Data Extraction Bot
         <span style="display:inline-block;margin-left:10px;background:#CC0000;color:#fff;
                      font-size:.7rem;font-weight:700;border-radius:4px;padding:2px 8px;
                      vertical-align:middle;letter-spacing:.5px;">v{{ version }}</span>
@@ -256,7 +257,7 @@
     <div class="card">
       <h2>1. Изберете файл</h2>
       <div id="dropzone" onclick="document.getElementById('fileInput').click()">
-        <div class="icon">&#128229;</div>
+        <div class="icon"><img src="/static/emoji/1f4e5.svg" alt="📥" style="width:48px;height:48px;"></div>
         <p>Пуснете файл тук или <strong>натиснете за избор</strong></p>
         <p style="font-size:.8rem;margin-top:6px">PDF &bull; Excel (.xlsx/.xls/.csv) &bull; Текст (.txt) &bull; Снимка (.jpg/.png/.tiff)</p>
         <div id="filename"></div>
@@ -308,7 +309,7 @@
         <div class="lang-btn" data-lang="de"><span class="flag-badge">DE</span> Немски</div>
       </div>
 
-      <button id="submitBtn" disabled>&#9889; Извличане на данни</button>
+      <button id="submitBtn" disabled><img class="ico" src="/static/emoji/26a1.svg" alt="⚡"> Извличане на данни</button>
 
       <div id="progress">
         <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
@@ -343,8 +344,8 @@
             <label><input type="checkbox" value="ean"> EAN / Баркод</label>
           </div>
         </div>
-        <button id="downloadBtn">&#11015; Свали Excel</button>
-        <button id="downloadNewBtn">&#11015; Свали само нови продукти (Excel)</button>
+        <button id="downloadBtn"><img class="ico" src="/static/emoji/2b07.svg" alt="⬇"> Свали Excel</button>
+        <button id="downloadNewBtn"><img class="ico" src="/static/emoji/2b07.svg" alt="⬇"> Свали само нови продукти (Excel)</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -406,7 +407,7 @@
 
   function setFile(f) {
     selectedFile = f;
-    document.getElementById('filename').textContent = '📄 ' + f.name + ' (' + (f.size/1024).toFixed(1) + ' KB)';
+    document.getElementById('filename').innerHTML = '<img class="ico" src="/static/emoji/1f4c4.svg" alt="📄"> ' + f.name + ' (' + (f.size/1024).toFixed(1) + ' KB)';
     submitBtn.disabled = false;
   }
 
@@ -562,27 +563,28 @@
     const totalVal   = st.total_value   || 0;
     const currency   = st.currency || 'EUR';
     let parts = [];
-    parts.push(`<span class="stat-item">&#128203; <span class="stat-num">${total}</span> реда от фактурата</span>`);
+    const _ico = c => `<img class="ico" src="/static/emoji/${c}.svg" alt="">`;
+    parts.push(`<span class="stat-item">${_ico('1f4cb')} <span class="stat-num">${total}</span> реда от фактурата</span>`);
     if (dupes > 0)
-      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-dup">&#8645; <span class="stat-num">${dupes}</span> обединени дублирани</span>`);
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-dup">⇅ <span class="stat-num">${dupes}</span> обединени дублирани</span>`);
     if (total !== exported)
-      parts.push(`<span class="stat-sep">|</span><span class="stat-item">&#11015; <span class="stat-num">${exported}</span> реда в експорта</span>`);
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item">${_ico('2b07')} <span class="stat-num">${exported}</span> реда в експорта</span>`);
     if (totalQty > 0)
-      parts.push(`<span class="stat-sep">|</span><span class="stat-item">&#128230; <span class="stat-num">${totalQty.toLocaleString('bg-BG')}</span> бр. общо</span>`);
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item">${_ico('1f4e6')} <span class="stat-num">${totalQty.toLocaleString('bg-BG')}</span> бр. общо</span>`);
     if (totalVal > 0) {
       const valFmt = totalVal.toLocaleString('bg-BG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-val">&#128181; <span class="stat-num">${valFmt} ${currency}</span></span>`);
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-val">${_ico('1f4b5')} <span class="stat-num">${valFmt} ${currency}</span></span>`);
     }
     if (newProd > 0)
-      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-new">&#9733; <span class="stat-num">${newProd}</span> нови продукта</span>`);
-    parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-ok">&#10003; <span class="stat-num">${knownProd}</span> познати</span>`);
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-new">★ <span class="stat-num">${newProd}</span> нови продукта</span>`);
+    parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-ok">✓ <span class="stat-num">${knownProd}</span> познати</span>`);
     statsBar.innerHTML = parts.join(' ');
     statsBar.style.display = 'flex';
 
     // Show "new only" button only when there are new products
     const newCount = data.records.filter(r => r.is_new_product).length;
     if (newCount > 0) {
-      downloadNewBtn.textContent = `⬇ Свали само нови продукти (${newCount} бр.) — Excel`;
+      downloadNewBtn.innerHTML = `<img class="ico" src="/static/emoji/2b07.svg" alt="⬇"> Свали само нови продукти (${newCount} бр.) — Excel`;
       downloadNewBtn.style.display = 'block';
     } else {
       downloadNewBtn.style.display = 'none';
