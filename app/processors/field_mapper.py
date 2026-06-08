@@ -3233,10 +3233,50 @@ def _rigum_qty_label(n: int, unit: str) -> str:
     return f"{n} {'Брой' if n == 1 else 'Броя'}"
 
 
+def _rigum_merge_or_add(records: list, seen_map: dict, rec: ProductRecord) -> None:
+    """Append rec to records, merging with an existing entry if same code+price.
+
+    Same unit price → sum quantities and totals (one export row).
+    Different unit price → keep as a separate row.
+    seen_map: dict[code, list[int]] mapping product_code → indices in records.
+    """
+    code = rec.product_code
+    if code in seen_map:
+        for idx in seen_map[code]:
+            existing = records[idx]
+            if existing.price == rec.price:
+                existing.merged_count += 1
+                if rec.quantity and existing.quantity:
+                    try:
+                        em = re.search(r'(\d+)\s+(Брой|Броя|Комплект|Комплекта)', existing.quantity)
+                        nm = re.search(r'(\d+)\s+(Брой|Броя|Комплект|Комплекта)', rec.quantity)
+                        if em and nm:
+                            total_n = int(em.group(1)) + int(nm.group(1))
+                            unit_w = em.group(2)
+                            if unit_w in ('Брой', 'Броя'):
+                                existing.quantity = f"{total_n} {'Брой' if total_n == 1 else 'Броя'}"
+                            else:
+                                existing.quantity = f"{total_n} {'Комплект' if total_n == 1 else 'Комплекта'}"
+                    except Exception:
+                        pass
+                if rec.total_price and existing.total_price:
+                    try:
+                        ep = float(existing.total_price.replace(' EUR', '').replace(',', '.'))
+                        np_ = float(rec.total_price.replace(' EUR', '').replace(',', '.'))
+                        existing.total_price = f"{ep + np_:.2f} EUR"
+                    except Exception:
+                        pass
+                return
+        seen_map[code].append(len(records))
+    else:
+        seen_map[code] = [len(records)]
+    records.append(rec)
+
+
 def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
     """Text fallback when pdfplumber finds no usable tables."""
     records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -3248,10 +3288,6 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
 
         code  = m.group(1)
         after = m.group(2).strip()
-
-        if code in seen:
-            i += 1
-            continue
 
         # Collect continuation lines until next product code
         extra_lines: list[str] = []
@@ -3310,8 +3346,7 @@ def _parse_rigum_from_text(text: str) -> list[ProductRecord]:
         rec.quantity      = quantity
         rec.price         = price
         rec.total_price   = total_price
-        seen.add(code)
-        records.append(rec)
+        _rigum_merge_or_add(records, seen, rec)
         i = j
 
     logger.info("Rigum text extraction: %d records", len(records))
@@ -3326,12 +3361,10 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
             logger.info("Rigum table[%d] row[%d]: %s", ti, ri, [str(c or "")[:50] for c in row])
 
     table_records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_rigum_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            _rigum_merge_or_add(table_records, seen, rec)
 
     text_records = _parse_rigum_from_text(text) if text else []
 
