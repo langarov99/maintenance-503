@@ -201,6 +201,7 @@
     .stat-new  { color: #e65100; }
     .stat-dup  { color: #6a1b9a; }
     .stat-ok   { color: #1b5e20; }
+    .stat-val  { color: #0d47a1; font-weight: 600; }
 
     /* ── Mobile responsive ───────────────────────────────────────────── */
     @media (max-width: 600px) {
@@ -557,12 +558,21 @@
     const dupes      = st.duplicates_merged || 0;
     const newProd    = st.new_products  !== undefined ? st.new_products  : data.records.filter(r=>r.is_new_product).length;
     const knownProd  = st.known_products !== undefined ? st.known_products : (exported - newProd);
+    const totalQty   = st.total_quantity || 0;
+    const totalVal   = st.total_value   || 0;
+    const currency   = st.currency || 'EUR';
     let parts = [];
     parts.push(`<span class="stat-item">&#128203; <span class="stat-num">${total}</span> реда от фактурата</span>`);
     if (dupes > 0)
       parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-dup">&#8645; <span class="stat-num">${dupes}</span> обединени дублирани</span>`);
     if (total !== exported)
       parts.push(`<span class="stat-sep">|</span><span class="stat-item">&#11015; <span class="stat-num">${exported}</span> реда в експорта</span>`);
+    if (totalQty > 0)
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item">&#128230; <span class="stat-num">${totalQty.toLocaleString('bg-BG')}</span> бр. общо</span>`);
+    if (totalVal > 0) {
+      const valFmt = totalVal.toLocaleString('bg-BG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-val">&#128181; <span class="stat-num">${valFmt} ${currency}</span></span>`);
+    }
     if (newProd > 0)
       parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-new">&#9733; <span class="stat-num">${newProd}</span> нови продукта</span>`);
     parts.push(`<span class="stat-sep">|</span><span class="stat-item stat-ok">&#10003; <span class="stat-num">${knownProd}</span> познати</span>`);

@@ -39,6 +39,18 @@ from .output.excel_writer import write_excel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+def _parse_amount(s: str) -> float:
+    """Parse a price string like '10.50 EUR' or '10,50 лв.' to float."""
+    if not s:
+        return 0.0
+    import re as _re
+    m = _re.search(r'(\d{1,8})[.,](\d{2})', str(s))
+    if m:
+        return float(m.group(1) + '.' + m.group(2))
+    m = _re.search(r'(\d+)', str(s))
+    return float(m.group(1)) if m else 0.0
+
+
 def _read_version() -> str:
     _vf = Path(__file__).parent.parent / "updates" / "version.txt"
     try:
@@ -824,6 +836,21 @@ async def extract(
         _exported = len(records)
         _total_in_invoice = sum(getattr(r, 'merged_count', 1) for r in records)
         _new_count = sum(1 for r in records if r.is_new_product)
+
+        import re as _re
+        _total_qty = sum(
+            int(_re.match(r'(\d+)', str(r.quantity)).group(1))
+            for r in records
+            if r.quantity and _re.match(r'(\d+)', str(r.quantity))
+        )
+        _total_value = round(sum(_parse_amount(r.total_price) for r in records), 2)
+        _currency = 'EUR'
+        for _r in records:
+            if _r.total_price:
+                if 'лв' in str(_r.total_price):
+                    _currency = 'лв.'
+                break
+
         return {
             "success": True,
             "message": f"Успешно извлечени {_exported} записа.",
@@ -839,6 +866,9 @@ async def extract(
                 "duplicates_merged": _total_in_invoice - _exported,
                 "new_products": _new_count,
                 "known_products": _exported - _new_count,
+                "total_quantity": _total_qty,
+                "total_value": _total_value,
+                "currency": _currency,
             },
         }
     finally:
