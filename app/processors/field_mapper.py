@@ -37,6 +37,43 @@ class ProductRecord:
         return d
 
 
+def _smart_merge_or_add(records: list, seen_map: dict, rec: "ProductRecord") -> None:
+    """Generic smart duplicate handler for all suppliers.
+
+    Same code + same unit price → merge (sum qty and total).
+    Same code + different unit price → keep as a separate row.
+    seen_map must be dict[code, list[int]] (code → indices in records).
+    """
+    code = rec.product_code
+    if code in seen_map:
+        for idx in seen_map[code]:
+            existing = records[idx]
+            if existing.price == rec.price:
+                existing.merged_count += 1
+                if rec.quantity and existing.quantity:
+                    try:
+                        em = re.match(r'(\d+)', existing.quantity.strip())
+                        nm = re.match(r'(\d+)', str(rec.quantity).strip())
+                        if em and nm:
+                            total_n = int(em.group(1)) + int(nm.group(1))
+                            existing.quantity = re.sub(r'^\d+', str(total_n), existing.quantity, count=1)
+                    except Exception:
+                        pass
+                if rec.total_price and existing.total_price:
+                    try:
+                        ep = float(existing.total_price.replace(',', '.').split()[0])
+                        np_ = float(rec.total_price.replace(',', '.').split()[0])
+                        suffix = ' EUR' if 'EUR' in (existing.total_price or '') else ''
+                        existing.total_price = f"{ep + np_:.2f}{suffix}"
+                    except Exception:
+                        pass
+                return
+        seen_map[code].append(len(records))
+    else:
+        seen_map[code] = [len(records)]
+    records.append(rec)
+
+
 # ---------------------------------------------------------------------------
 # Regex patterns — multilingual (BG, EN, PL, CS, IT, DE)
 # ---------------------------------------------------------------------------
@@ -449,8 +486,11 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
 
         records.append(rec)
 
-    seen: set[str] = set()
-    return [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
+    seen: dict[str, list[int]] = {}
+    deduped: list[ProductRecord] = []
+    for r in records:
+        _smart_merge_or_add(deduped, seen, r)
+    return deduped
 
 
 def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
@@ -533,10 +573,12 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.warning("OSRAM: dropped %s — no quantity found. Context: %s",
                            osram_article, " | ".join(before_lines[-4:]))
 
-    seen: set[str] = set()
-    deduped = [r for r in records if r.product_code not in seen and not seen.add(r.product_code)]
+    seen: dict[str, list[int]] = {}
+    deduped: list[ProductRecord] = []
+    for r in records:
+        _smart_merge_or_add(deduped, seen, r)
     if len(deduped) < len(records):
-        logger.info("OSRAM dedup: %d → %d (removed %d duplicates)",
+        logger.info("OSRAM dedup: %d → %d (removed/merged %d duplicates)",
                     len(records), len(deduped), len(records) - len(deduped))
     return deduped
 
@@ -1012,12 +1054,10 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
 def extract_amio_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Amio: %d table(s) received", len(tables))
     records = []
-    seen_codes: set[str] = set()
+    seen_codes: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_amio_table(table):
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
-                records.append(rec)
+            _smart_merge_or_add(records, seen_codes, rec)
     logger.info("Amio extraction: %d records from %d tables", len(records), len(tables))
 
     if not records and text:
@@ -2140,7 +2180,7 @@ def _parse_car_passion_from_text(text: str) -> list[ProductRecord]:
       {code} [{suffix}] {description words}  {qty}  szt  {VAT%}  {price}  {total}
     """
     records = []
-    seen_codes: set = set()
+    seen_codes: dict[str, list[int]] = {}
     lines = text.splitlines()
 
     # Log first 30 lines for debugging
@@ -2187,10 +2227,6 @@ def _parse_car_passion_from_text(text: str) -> list[ProductRecord]:
             code = tokens[0] + " " + tokens[1]
             code_end = 2
 
-        if code in seen_codes:
-            continue
-        seen_codes.add(code)
-
         # Quantity = token immediately before szt
         qty_str = tokens[szt_idx - 1]
         try:
@@ -2224,7 +2260,7 @@ def _parse_car_passion_from_text(text: str) -> list[ProductRecord]:
             if t:
                 rec.total_price = t + " EUR"
 
-        records.append(rec)
+        _smart_merge_or_add(records, seen_codes, rec)
         logger.info("Car Passion text: code=%s qty=%s price=%s total=%s",
                     code, rec.quantity, rec.price, rec.total_price)
 
@@ -2234,12 +2270,10 @@ def _parse_car_passion_from_text(text: str) -> list[ProductRecord]:
 def extract_car_passion_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Car Passion: %d table(s) received", len(tables))
     records = []
-    seen_codes: set = set()
+    seen_codes: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_car_passion_table(table):
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
-                records.append(rec)
+            _smart_merge_or_add(records, seen_codes, rec)
 
     if not records and text:
         logger.info("Car Passion: table extraction yielded 0 records, trying text fallback")
@@ -2477,23 +2511,19 @@ def _parse_vinove_from_text(text: str) -> list[ProductRecord]:
 def extract_vinove_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Vinove: %d table(s) received", len(tables))
     records = []
-    seen_codes: set[str] = set()
+    seen_codes: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_vinove_table(table):
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
-                records.append(rec)
+            _smart_merge_or_add(records, seen_codes, rec)
 
     # Always supplement with text to catch continuation-page rows that table
     # missed (e.g. page 2+ tables where pdfplumber finds no header row).
     if text:
         text_records = _parse_vinove_from_text(text)
-        added = 0
+        added_before = len(records)
         for rec in text_records:
-            if rec.product_code not in seen_codes:
-                seen_codes.add(rec.product_code)
-                records.append(rec)
-                added += 1
+            _smart_merge_or_add(records, seen_codes, rec)
+        added = len(records) - added_before
         if added:
             logger.info("Vinove: text supplement added %d records", added)
 
@@ -2683,7 +2713,7 @@ def _parse_amal_plast_from_text(text: str) -> list[ProductRecord]:
       {cena_brutto}  {wartość_netto}  {wartość_brutto}
     """
     records = []
-    seen_codes: set = set()
+    seen_codes: dict[str, list[int]] = {}
 
     for line in text.splitlines():
         line = line.strip()
@@ -2697,9 +2727,6 @@ def _parse_amal_plast_from_text(text: str) -> list[ProductRecord]:
         # Use last AP code occurrence (code column, not description column)
         m = ap_matches[-1]
         code = m.group(1).upper()
-        if code in seen_codes:
-            continue
-        seen_codes.add(code)
 
         rec = ProductRecord(extraction_method="text")
         rec.product_code = code
@@ -2739,7 +2766,7 @@ def _parse_amal_plast_from_text(text: str) -> list[ProductRecord]:
             if t:
                 rec.total_price = t + " EUR"
 
-        records.append(rec)
+        _smart_merge_or_add(records, seen_codes, rec)
         logger.info("Amal-Plast text: %s qty=%s price=%s total=%s",
                     code, rec.quantity, rec.price, rec.total_price)
 
@@ -3558,12 +3585,10 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
     logger.info("Frogum: %d table(s) received", len(tables))
 
     table_records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_frogum_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            _smart_merge_or_add(table_records, seen, rec)
 
     text_records = _parse_frogum_from_text(text) if text else []
 
@@ -3770,12 +3795,10 @@ def extract_gelly_plast_products(tables: list, text: str = "") -> list[ProductRe
     logger.info("GellyPlast: %d table(s) received", len(tables))
 
     table_records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_gelly_plast_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            _smart_merge_or_add(table_records, seen, rec)
 
     text_records = _parse_gelly_plast_from_text(text) if text else []
 
@@ -4240,12 +4263,10 @@ def extract_geyer_hosaja_products(tables: list, text: str = "") -> list[ProductR
     logger.info("Geyer & Hosaja: %d table(s) received", len(tables))
 
     table_records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     for table in tables:
         for rec in _parse_geyer_hosaja_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            _smart_merge_or_add(table_records, seen, rec)
 
     text_records = _parse_geyer_hosaja_from_text(text) if text else []
 
@@ -4586,22 +4607,19 @@ def extract_petex_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Petex: %d table(s) received", len(tables))
 
     table_records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
 
     # Try classic parser first (old format: one big table with header + all products)
     for table in tables:
         for rec in _parse_petex_table(table):
-            if rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            _smart_merge_or_add(table_records, seen, rec)
 
     # New format: one table per product (each table has pos|EAN|desc|qty|unit|price|rabatt|total)
     if not table_records:
         for table in tables:
             rec = _parse_petex_product_table(table)
-            if rec and rec.product_code not in seen:
-                seen.add(rec.product_code)
-                table_records.append(rec)
+            if rec:
+                _smart_merge_or_add(table_records, seen, rec)
 
     n_table = len(table_records)
     text_records = _parse_petex_from_text(text) if text else []
@@ -4770,12 +4788,10 @@ def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
     for table in tables:
         raw.extend(_parse_hakr_table(table))
 
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     records = []
     for rec in raw:
-        if rec.product_code not in seen:
-            seen.add(rec.product_code)
-            records.append(rec)
+        _smart_merge_or_add(records, seen, rec)
 
     if records:
         logger.info("Hakr: %d records from tables", len(records))
@@ -5104,7 +5120,7 @@ def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
     The TP###### code appears on a separate line 1-4 lines below.
     """
     records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
     lines = text.splitlines()
 
     # Data line: Lp+Name QTY szt. price_no_disc rabat unit_price net St% tax brutto
@@ -5126,9 +5142,6 @@ def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
         if not m:
             continue
         code = m.group(1).upper()
-        if code in seen:
-            continue
-        seen.add(code)
 
         # Find closest preceding data line (up to 10 lines back)
         data_match = None
@@ -5168,7 +5181,7 @@ def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
         if total is not None:
             rec.total_price = f"{total:.2f} EUR"
 
-        records.append(rec)
+        _smart_merge_or_add(records, seen, rec)
         logger.info("ToMPaR: code=%s qty=%s price=%s total=%s name=%r",
                     code, qty, unit_price, total, name)
 
@@ -5268,7 +5281,7 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
     qty + unit (бр) + price + total at the end of the chunk.
     """
     records: list[ProductRecord] = []
-    seen: set[str] = set()
+    seen: dict[str, list[int]] = {}
 
     logger.info("Senax text fallback — first 500 chars:\n%s", text[:500])
 
@@ -5284,9 +5297,6 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
     )
 
     for idx, (pos, code) in enumerate(code_positions):
-        if code in seen:
-            continue
-        seen.add(code)
 
         # Chunk: from this code to the next code occurrence (or end of text)
         end_pos = code_positions[idx + 1][0] if idx + 1 < len(code_positions) else len(text)
@@ -5325,7 +5335,7 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
             rec.price = price_str + " лв."
         if total_str:
             rec.total_price = total_str + " лв."
-        records.append(rec)
+        _smart_merge_or_add(records, seen, rec)
         logger.info("Senax text: code=%s name=%r qty=%s price=%s total=%s",
                     code, name, qty, price_str, total_str)
 
