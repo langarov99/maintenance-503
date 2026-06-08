@@ -10,6 +10,9 @@ import webbrowser
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+NETWORK_MODE = "--network" in sys.argv  # --network → слуша на 0.0.0.0 (достъпен от мрежата)
+HOST = "0.0.0.0" if NETWORK_MODE else "127.0.0.1"
+
 
 def find_free_port(start: int = 5000, end: int = 5010) -> int:
     for port in range(start, end + 1):
@@ -20,6 +23,15 @@ def find_free_port(start: int = 5000, end: int = 5010) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free port found between {start} and {end}")
+
+
+def get_local_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "?"
 
 
 def open_browser(port: int):
@@ -40,8 +52,13 @@ if __name__ == "__main__":
     print()
     print(" ================================================")
     print(f"  Data Extraction Bot  -  http://localhost:{port}")
+    if NETWORK_MODE:
+        local_ip = get_local_ip()
+        print(f"  Mrezhen dostap      -  http://{local_ip}:{port}")
     print(" ================================================")
     print("  Zatvorete tozi prozorec za da spirete bota.")
+    if NETWORK_MODE:
+        print("  REZHIM: dostapen ot vsички ustrojstva v mrezhata.")
     print()
 
     threading.Thread(target=open_browser, args=(port,), daemon=True).start()
@@ -49,7 +66,7 @@ if __name__ == "__main__":
     os.chdir(ROOT)
     subprocess.run([
         sys.executable, "-m", "uvicorn", "app.main:app",
-        "--host", "127.0.0.1",
+        "--host", HOST,
         "--port", str(port),
         "--app-dir", ROOT,
     ])
