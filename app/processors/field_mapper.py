@@ -3179,8 +3179,6 @@ def _parse_rigum_table(table: list[list]) -> list[ProductRecord]:
         desc_raw = cell(desc_idx)
         m = _RIGUM_CODE_RE.search(desc_raw)
         if not m:
-            if any(str(c or "").strip() for c in row):
-                logger.info("Rigum skipped row: %s", [str(c or "")[:50] for c in row])
             continue
 
         code = m.group(1)
