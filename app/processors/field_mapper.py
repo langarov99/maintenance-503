@@ -3406,7 +3406,7 @@ def extract_rigum_products(tables: list, text: str = "") -> list[ProductRecord]:
 # FROGUM
 # ---------------------------------------------------------------------------
 
-_FROGUM_LINE_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z0-9]{6,8})\s+(.*)', re.UNICODE)
+_FROGUM_LINE_RE = re.compile(r'^\s*\d{1,3}\s+([A-Z0-9][A-Z0-9\-\.]{3,11})\s+(.*)', re.UNICODE)
 
 
 def _is_frogum_document(text: str) -> bool:
@@ -3472,7 +3472,10 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
             return str(row[ci] or "").strip()
 
         code = cell(ref_idx)
-        if not re.match(r'^[A-Z0-9]{6,8}$', code):
+        if not re.match(r'^[A-Z0-9][A-Z0-9\-\.]{3,11}$', code):
+            if code:
+                logger.warning("Frogum: skipped row — code %r doesn't match pattern | row: %s",
+                               code, [str(c or "")[:30] for c in row])
             continue
 
         name     = cell(desc_idx) if desc_idx is not None else ""
@@ -3630,6 +3633,13 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
     # Use text for full code coverage; fill missing prices/qty from table
     if text_records and table_records:
         table_by_code = {r.product_code: r for r in table_records}
+        text_codes = {r.product_code for r in text_records}
+        only_in_table = [c for c in table_by_code if c not in text_codes]
+        only_in_text  = [r.product_code for r in text_records if r.product_code not in table_by_code]
+        if only_in_table:
+            logger.warning("Frogum: codes in table but NOT in text (will be missing): %s", only_in_table)
+        if only_in_text:
+            logger.info("Frogum: codes in text but not in table: %s", only_in_text)
         for rec in text_records:
             t = table_by_code.get(rec.product_code)
             if t:
@@ -3642,6 +3652,11 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
                     rec.price = t.price
                 if t.total_price:
                     rec.total_price = t.total_price
+        # Append any table-only codes that text layer missed
+        for code in only_in_table:
+            records_copy = table_by_code[code]
+            logger.info("Frogum: adding table-only record %s", code)
+            text_records.append(records_copy)
         records = text_records
     else:
         records = table_records if table_records else text_records
