@@ -3446,15 +3446,17 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
                     return idx
         return None
 
-    ref_idx   = find(["reference"])
-    desc_idx  = find(["description"])
-    unit_idx  = find(["unit"])
-    qty_idx   = find(["q-ty", "qty", "quantity", "ilość", "ilosc"])
-    price_idx = find(["net price"])
-    total_idx = find(["net value", "gross value"])
+    ref_idx        = find(["reference"])
+    desc_idx       = find(["description"])
+    unit_idx       = find(["unit"])
+    qty_idx        = find(["q-ty", "qty", "quantity", "ilość", "ilosc"])
+    list_price_idx = find(["net price"])
+    disc_idx       = find(["discount %", "discount"])
+    price_idx      = find(["discounted net price"])
+    total_idx      = find(["net value", "gross value"])
 
-    logger.info("Frogum table cols → ref=%s qty=%s price=%s total=%s | headers: %s",
-                ref_idx, qty_idx, price_idx, total_idx, headers)
+    logger.info("Frogum table cols → ref=%s qty=%s list_price=%s disc=%s price=%s total=%s | headers: %s",
+                ref_idx, qty_idx, list_price_idx, disc_idx, price_idx, total_idx, headers)
 
     if ref_idx is None:
         return []
@@ -3485,6 +3487,16 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
                 quantity = _frogum_qty_label(n, unit_raw)
 
         price_raw = cell(price_idx) or ""
+        if not price_raw and list_price_idx is not None and disc_idx is not None:
+            lp_raw = cell(list_price_idx)
+            dc_raw = cell(disc_idx)
+            if lp_raw and dc_raw and re.search(r'\d', lp_raw) and re.search(r'\d', dc_raw):
+                try:
+                    lp = float(lp_raw.replace(',', '.'))
+                    dc = float(dc_raw.replace(',', '.'))
+                    price_raw = f"{lp * (1 - dc / 100):.2f}"
+                except Exception:
+                    pass
         price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
 
         total_raw = cell(total_idx) or ""
