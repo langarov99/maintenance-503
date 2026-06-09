@@ -3550,22 +3550,32 @@ def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
                 quantity = _frogum_qty_label(int(_qm.group(1)), unit_str)
                 break
 
-            # Decimal numbers after unit: net_price, 0.00 (VAT), gross_value, net_value
-            decimals = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
-            # decimals[0]=net_price, decimals[1]=VAT(0.00), decimals[2]=gross, decimals[3]=net
-            if len(decimals) >= 3:
-                price       = decimals[0].replace(',', '.') + ' EUR'
-                total_price = decimals[2].replace(',', '.') + ' EUR'
-            elif len(decimals) == 2:
-                price       = decimals[0].replace(',', '.') + ' EUR'
-                total_price = decimals[1].replace(',', '.') + ' EUR'
-            elif len(decimals) == 1:
-                price = decimals[0].replace(',', '.') + ' EUR'
+            # Collect monetary decimals; skip anything followed by % (VAT/disc rate).
+            # Strategy: the VAT amount is always 0,00 on Frogum export invoices.
+            # Old format 4 values: [net_price, 0,00, gross, net]  → 3 non-zero
+            # New format 5 values: [list_price, net_price, 0,00, gross, net] → 4 non-zero
+            # Using non-zero count lets us detect the discount column automatically.
+            _nonzero: list[str] = []
+            for _dm in re.finditer(r'\b(\d{1,6}[.,]\d{2})\b', after_unit):
+                _sfx = after_unit[_dm.end():_dm.end() + 2].lstrip()
+                if _sfx.startswith('%'):
+                    continue
+                if float(_dm.group(1).replace(',', '.')) > 0:
+                    _nonzero.append(_dm.group(1))
+            if len(_nonzero) >= 4:
+                # New format with discount: skip first (list price), use second as unit price
+                price       = _nonzero[1].replace(',', '.') + ' EUR'
+                total_price = _nonzero[-1].replace(',', '.') + ' EUR'
+            elif len(_nonzero) >= 2:
+                price       = _nonzero[0].replace(',', '.') + ' EUR'
+                total_price = _nonzero[-1].replace(',', '.') + ' EUR'
+            elif len(_nonzero) == 1:
+                price = _nonzero[0].replace(',', '.') + ' EUR'
 
         # Build description from the 'after' part (stop before unit/numeric data)
         name_parts = []
         for part in [after] + extra_lines:
-            if re.search(r'\b(?:set|pcs?)\b', part, re.IGNORECASE):
+            if re.search(r'\b(?:set|pcs?|szt\.?|kpl\.?)\b', part, re.IGNORECASE):
                 break
             name_parts.append(part)
         name = " ".join(name_parts).strip()
