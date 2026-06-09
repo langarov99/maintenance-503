@@ -3472,6 +3472,8 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
             return str(row[ci] or "").strip()
 
         code = cell(ref_idx)
+        # Normalize multi-line code cells (PDF wraps long codes) — take first line
+        code = code.split('\n')[0].strip()
         if not re.match(r'^[A-Z0-9][A-Z0-9\-\.]{3,11}$', code):
             if code:
                 logger.warning("Frogum: skipped row — code %r doesn't match pattern | row: %s",
@@ -3533,6 +3535,7 @@ def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
         after = m.group(2).strip()
 
         if code in seen:
+            logger.info("Frogum text: skipping duplicate code %s", code)
             i += 1
             continue
 
@@ -3624,9 +3627,19 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
 
     table_records: list[ProductRecord] = []
     seen: dict[str, list[int]] = {}
+    raw_table_count = 0
     for table in tables:
-        for rec in _parse_frogum_table(table):
+        recs = _parse_frogum_table(table)
+        raw_table_count += len(recs)
+        for rec in recs:
             _smart_merge_or_add(table_records, seen, rec)
+    merged_count = raw_table_count - len(table_records)
+    if merged_count:
+        merged_codes = [c for c, idxs in seen.items() if table_records[idxs[0]].merged_count > 1]
+        logger.info("Frogum table: %d raw rows → %d after merge (%d merged). Merged codes: %s",
+                    raw_table_count, len(table_records), merged_count, merged_codes)
+    else:
+        logger.info("Frogum table: %d rows (no merges)", raw_table_count)
 
     text_records = _parse_frogum_from_text(text) if text else []
 
