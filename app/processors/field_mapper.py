@@ -3603,9 +3603,13 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
         for rec in text_records:
             t = table_by_code.get(rec.product_code)
             if t:
-                if not rec.price:
+                # Prefer table for price/total — table uses explicit column headers
+                # (Net price, Net value) that correctly reflect post-discount values.
+                # Text parsing picks up the list price as decimals[0] when the new
+                # format adds a discount column, producing wrong price/total.
+                if t.price:
                     rec.price = t.price
-                if not rec.total_price:
+                if t.total_price:
                     rec.total_price = t.total_price
                 # Also replace qty=0 from text (misread VAT%) with table value
                 _qty_n = int(re.match(r'(\d+)', rec.quantity).group(1)) if rec.quantity and re.match(r'(\d+)', rec.quantity) else None
