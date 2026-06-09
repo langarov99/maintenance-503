@@ -896,7 +896,7 @@ async def download_new_only(filename: str):
     new_records = [r for r in records if r.is_new_product]
     if not new_records:
         raise HTTPException(404, "Няма нови продукти за изтегляне.")
-    stem = Path(filename).stem
+    stem = Path(filename).stem[:50]
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=1) as pool:
         out_path = await loop.run_in_executor(

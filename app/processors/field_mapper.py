@@ -3414,7 +3414,7 @@ def _is_frogum_document(text: str) -> bool:
 
 
 def _frogum_qty_label(n: int, unit: str) -> str:
-    if re.search(r'\bset\b', unit, re.IGNORECASE):
+    if re.search(r'\b(set|kpl)\b', unit, re.IGNORECASE):
         return f"{n} {'Комплект' if n == 1 else 'Комплекта'}"
     return f"{n} {'Брой' if n == 1 else 'Броя'}"
 
@@ -3475,9 +3475,11 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
 
         qty_raw = cell(qty_idx) or ""
         quantity = None
-        if qty_raw and re.match(r'^\d+$', qty_raw):
-            n = int(qty_raw)
-            quantity = _frogum_qty_label(n, unit_raw)
+        if qty_raw:
+            _qm = re.match(r'^(\d+)', qty_raw)
+            if _qm:
+                n = int(_qm.group(1))
+                quantity = _frogum_qty_label(n, unit_raw)
 
         price_raw = cell(price_idx) or ""
         price = (price_raw.replace(',', '.') + ' EUR') if price_raw and re.search(r'\d', price_raw) else None
@@ -3531,19 +3533,22 @@ def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
 
         search_text = " ".join([line] + extra_lines)
 
-        # Unit marker
-        unit_m = re.search(r'\b(set|pcs?)\b', search_text, re.IGNORECASE)
+        # Unit marker — English (set/pcs) or Polish (szt./kpl.)
+        unit_m = re.search(r'\b(set|pcs?|szt\.?|kpl\.?)\b', search_text, re.IGNORECASE)
         quantity = price = total_price = None
 
         if unit_m:
             unit_str   = unit_m.group(1)
             after_unit = search_text[unit_m.end():]
 
-            # Q-TY is an integer right after unit
-            qty_m = re.search(r'\b(\d+)\b', after_unit)
-            if qty_m:
-                n        = int(qty_m.group(1))
-                quantity = _frogum_qty_label(n, unit_str)
+            # Q-TY: first integer after unit that is not a VAT% ("0%", "23%")
+            # or part of a decimal number ("10,25", "10.25")
+            for _qm in re.finditer(r'\b(\d+)\b', after_unit):
+                _sfx = after_unit[_qm.end():_qm.end() + 2].lstrip(' ')
+                if _sfx.startswith('%') or _sfx.startswith(',') or _sfx.startswith('.'):
+                    continue
+                quantity = _frogum_qty_label(int(_qm.group(1)), unit_str)
+                break
 
             # Decimal numbers after unit: net_price, 0.00 (VAT), gross_value, net_value
             decimals = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
@@ -3602,7 +3607,9 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
                     rec.price = t.price
                 if not rec.total_price:
                     rec.total_price = t.total_price
-                if not rec.quantity:
+                # Also replace qty=0 from text (misread VAT%) with table value
+                _qty_n = int(re.match(r'(\d+)', rec.quantity).group(1)) if rec.quantity and re.match(r'(\d+)', rec.quantity) else None
+                if not rec.quantity or _qty_n == 0:
                     rec.quantity = t.quantity
         records = text_records
     else:
