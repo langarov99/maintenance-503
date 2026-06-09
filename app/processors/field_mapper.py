@@ -3449,9 +3449,12 @@ def _parse_frogum_table(table: list[list]) -> list[ProductRecord]:
     ref_idx   = find(["reference"])
     desc_idx  = find(["description"])
     unit_idx  = find(["unit"])
-    qty_idx   = find(["q-ty", "qty", "quantity"])
+    qty_idx   = find(["q-ty", "qty", "quantity", "ilość", "ilosc"])
     price_idx = find(["net price"])
     total_idx = find(["net value", "gross value"])
+
+    logger.info("Frogum table cols → ref=%s qty=%s price=%s total=%s | headers: %s",
+                ref_idx, qty_idx, price_idx, total_idx, headers)
 
     if ref_idx is None:
         return []
@@ -3541,13 +3544,18 @@ def _parse_frogum_from_text(text: str) -> list[ProductRecord]:
             unit_str   = unit_m.group(1)
             after_unit = search_text[unit_m.end():]
 
-            # Q-TY: first integer after unit that is not a VAT% ("0%", "23%")
-            # or part of a decimal number ("10,25", "10.25")
+            # Q-TY: first positive integer after unit that is not:
+            #  - a VAT/discount rate followed by "%" ("0%", "25%")
+            #  - the integer part of a decimal number ("10,25")
+            #  - a bare "0" (VAT rate shown without % symbol in new format)
             for _qm in re.finditer(r'\b(\d+)\b', after_unit):
+                _val = int(_qm.group(1))
+                if _val == 0:
+                    continue  # bare "0" = VAT rate without % symbol
                 _sfx = after_unit[_qm.end():_qm.end() + 2].lstrip(' ')
                 if _sfx.startswith('%') or _sfx.startswith(',') or _sfx.startswith('.'):
                     continue
-                quantity = _frogum_qty_label(int(_qm.group(1)), unit_str)
+                quantity = _frogum_qty_label(_val, unit_str)
                 break
 
             # Collect monetary decimals; skip anything followed by % (VAT/disc rate).
@@ -3613,21 +3621,34 @@ def extract_frogum_products(tables: list, text: str = "") -> list[ProductRecord]
         for rec in text_records:
             t = table_by_code.get(rec.product_code)
             if t:
-                # Prefer table for price/total — table uses explicit column headers
-                # (Net price, Net value) that correctly reflect post-discount values.
-                # Text parsing picks up the list price as decimals[0] when the new
-                # format adds a discount column, producing wrong price/total.
+                # Always prefer table for all numeric fields — table uses
+                # explicit column headers and is immune to text-layer noise
+                # (discount %, VAT rate, carton qty appearing as product qty).
+                if t.quantity:
+                    rec.quantity = t.quantity
                 if t.price:
                     rec.price = t.price
                 if t.total_price:
                     rec.total_price = t.total_price
-                # Also replace qty=0 from text (misread VAT%) with table value
-                _qty_n = int(re.match(r'(\d+)', rec.quantity).group(1)) if rec.quantity and re.match(r'(\d+)', rec.quantity) else None
-                if not rec.quantity or _qty_n == 0:
-                    rec.quantity = t.quantity
         records = text_records
     else:
         records = table_records if table_records else text_records
+
+    # Post-process: derive unit price from total / qty.
+    # This corrects any column-mapping errors (e.g. discount % read as price)
+    # and is always mathematically correct when both values are available.
+    for _rec in records:
+        if _rec.total_price and _rec.quantity:
+            _qm = re.match(r'(\d+)', str(_rec.quantity))
+            if _qm:
+                _n = int(_qm.group(1))
+                if _n > 0:
+                    try:
+                        _t = float(re.search(r'[\d.]+', _rec.total_price).group())
+                        _sfx = ' EUR' if 'EUR' in (_rec.total_price or '') else ''
+                        _rec.price = f"{round(_t / _n, 2):.2f}{_sfx}"
+                    except Exception:
+                        pass
 
     logger.info("Frogum: %d records (table=%d text=%d)",
                 len(records), len(table_records), len(text_records))
