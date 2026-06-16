@@ -1722,6 +1722,17 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
                 if t:
                     rec.total_price = t + " EUR"
 
+            # Derive unit price from total / qty when price column is absent
+            if not rec.price and rec.total_price and rec.quantity:
+                try:
+                    _qm = re.match(r'(\d+)', str(rec.quantity))
+                    _n = int(_qm.group(1)) if _qm else 0
+                    if _n > 0:
+                        _t = float(re.search(r'[\d.]+', rec.total_price).group())
+                        rec.price = f"{round(_t / _n, 2):.2f} EUR"
+                except Exception:
+                    pass
+
             if weight:
                 rec.weight_kg = weight
 
