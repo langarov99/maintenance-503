@@ -1674,7 +1674,7 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
 
             # Product code row: col 1 has a short uppercase code (e.g. CP14W, CP5S)
             # The No. number appears on the NEXT row, description on the row after that.
-            if not (code and re.match(r'^[A-Z][A-Z0-9\-/]{1,15}$', code)):
+            if not (code and re.match(r'^[A-Z][A-Z0-9\-/ ]{1,20}$', code)):
                 if code:
                     logger.warning("M-Tech: skipped row — code %r doesn't match | row snippet: %s",
                                    code, [str(c or "")[:20] for c in row1[:8]])
