@@ -1631,9 +1631,13 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             # Strip regular and non-breaking spaces
             return re.sub(r'[\xa0\s]+', ' ', str(row[idx] or "")).strip()
 
-        # Calibrate actual column positions from the first product's rows.
-        # Header indices are unreliable due to merged cells in the Excel.
-        ean_pos = weight_pos = qty_pos = price_pos = total_pos = None
+        # Prefer explicit header positions (new invoice format has named columns).
+        # Fall back to calibration from first product row for older formats.
+        ean_pos    = find_col(["ean"])
+        weight_pos = find_col(["weight"])
+        qty_pos    = find_col(["qty", "quantity"])
+        price_pos  = find_col(["subtotal price", "unit price", "price"])
+        total_pos  = find_col(["subtotal\nvalue", "subtotal value", "net value", "total value", "total"])
 
         data_rows = table[header_idx + 1:]
         for dr in data_rows:
@@ -1644,20 +1648,21 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             if data_rows.index(dr) + 2 >= len(data_rows):
                 break
             desc_row_sample = data_rows[data_rows.index(dr) + 2]
+            # Calibrate only positions not already found in the header
             for ci, val in enumerate(dr):
                 v = cell(dr, ci)
-                if re.match(r'^\d{8,14}$', v):
-                    ean_pos = ci          # EAN in code row
-                elif re.match(r'^\d+\.\d+$', v) and 0.05 < float(v) < 100:
-                    weight_pos = ci       # Weight in code row (small decimal)
+                if ean_pos is None and re.match(r'^\d{8,14}$', v):
+                    ean_pos = ci
+                elif weight_pos is None and re.match(r'^\d+\.\d+$', v) and 0.05 < float(v) < 100:
+                    weight_pos = ci
             for ci, val in enumerate(desc_row_sample):
                 v = cell(desc_row_sample, ci)
-                if ci == ean_pos and re.match(r'^\d+$', v):
-                    qty_pos = ci          # Qty in desc row at same col as EAN
-                elif re.match(r'^\d+[.,]\d{2}$', v) and price_pos is None and ci > (ean_pos or 0):
-                    price_pos = ci        # First clean decimal after qty → unit price
-                elif re.search(r'\d+[.,]\d{2}.*EUR', v) and ci > (price_pos or 0):
-                    total_pos = ci        # "53,15 EUR" pattern → total
+                if qty_pos is None and ci == ean_pos and re.match(r'^\d+$', v):
+                    qty_pos = ci
+                elif price_pos is None and re.match(r'^\d+[.,]\d{2}$', v) and ci > (ean_pos or 0):
+                    price_pos = ci
+                elif total_pos is None and re.search(r'\d+[.,]\d{2}.*EUR', v) and ci > (price_pos or 0):
+                    total_pos = ci
             logger.info("M-Tech calibrated: ean=%s weight=%s qty=%s price=%s total=%s",
                         ean_pos, weight_pos, qty_pos, price_pos, total_pos)
             break
@@ -1679,9 +1684,18 @@ def extract_mtech_products(tables: list, text: str = "") -> list[ProductRecord]:
             # Structure per product: [code_row] [number_row] [description_row]
             desc_row  = data_rows[i + 2] if i + 2 < len(data_rows) else []
             desc      = cell(desc_row, desc_idx)
-            qty_raw   = cell(desc_row, qty_pos) if qty_pos is not None else ""
-            price_raw = cell(desc_row, price_pos) if price_pos is not None else ""
-            total_raw = cell(desc_row, total_pos) if total_pos is not None else ""
+
+            def _from_either(pos):
+                """Return value from row1 or desc_row — whichever is non-empty."""
+                if pos is None:
+                    return ""
+                v1 = cell(row1, pos)
+                v2 = cell(desc_row, pos) if desc_row else ""
+                return v1 if v1 else v2
+
+            qty_raw   = _from_either(qty_pos)
+            price_raw = _from_either(price_pos)
+            total_raw = _from_either(total_pos)
 
             rec = ProductRecord(extraction_method="table")
             rec.product_code = code
