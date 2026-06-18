@@ -951,7 +951,8 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
          13-digit EAN to split name / numeric fields.
     """
     records: list[ProductRecord] = []
-    seen_rows: set[str] = set()  # dedup by row number, not code — same product can appear twice
+    seen_rows: set[str] = set()       # dedup by row number
+    seen_merge: dict[str, list[int]] = {}  # for _smart_merge_or_add
 
     # Flatten to one string — multi-line product names become contiguous.
     full = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())
@@ -965,11 +966,15 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
     if not row_starts:
         return records
 
+    seen_codes: dict[str, list[int]] = {}  # for duplicate-code detection
+
     for i, rm in enumerate(row_starts):
         code = rm.group(2)
         seg_start = rm.end()
         seg_end   = row_starts[i + 1].start() if i + 1 < len(row_starts) else len(full)
         segment   = full[seg_start:seg_end]
+        logger.debug("Amio: match %d → row_num=%s code=%s matched=%r seg[:80]=%r",
+                     i, rm.group(1), code, rm.group(0), segment[:80])
 
         # Step 2 — anchor on 13-digit EAN.
         ean_m = re.search(r'\b(\d{13})\b', segment)
@@ -1044,7 +1049,17 @@ def _parse_amio_from_text(text: str) -> list[ProductRecord]:
         if total_str:
             rec.total_price = total_str + ' EUR'
 
-        records.append(rec)
+        if code in seen_codes:
+            logger.warning(
+                "Amio text: duplicate code %s — row_num=%s (prev at rows %s). "
+                "qty=%s total=%s | match=%r seg[:80]=%r",
+                code, rm.group(1), seen_codes[code],
+                rec.quantity, rec.total_price,
+                rm.group(0), segment[:80],
+            )
+        seen_codes.setdefault(code, []).append(rm.group(1))
+
+        _smart_merge_or_add(records, seen_merge, rec)
         logger.info("Amio text: code=%s qty=%s total=%s",
                     code, rec.quantity, rec.total_price)
 
