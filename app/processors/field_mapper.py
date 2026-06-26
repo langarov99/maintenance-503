@@ -467,19 +467,49 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # ── Единична цена: sum all "X/ 1 PCE" lines (net price + recycling fee)
+        # ── Обща сума: rightmost European-format decimal on position line
+        total_m = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', block[0].strip())
+        if total_m:
+            raw_total = float(total_m.group(1).replace('.', '').replace(',', '.'))
+            rec.total_price = f"{raw_total:.2f} EUR"
+
+        # ── Единична цена primary: sum all "X/ 1 PCE" lines (net + fees)
+        blk_price_primary: Optional[float] = None
         up_matches = _UNIT_PRICE_RE.findall(block_text)
         if up_matches:
             try:
-                total_unit = sum(float(p.replace(",", ".")) for p in up_matches)
-                rec.price = f"{round(total_unit, 2):.2f} EUR"
+                blk_price_primary = round(sum(float(p.replace(",", ".")) for p in up_matches), 2)
             except ValueError:
-                rec.price = up_matches[0].replace(",", ".") + " EUR"
+                try:
+                    blk_price_primary = round(float(up_matches[0].replace(",", ".")), 2)
+                except ValueError:
+                    pass
 
-        # ── Обща сума: rightmost decimal on position line (e.g. 53,85)
-        total_m = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', block[0].strip())
-        if total_m:
-            rec.total_price = total_m.group(1) + " EUR"
+        # ── Единична цена secondary: total / qty cross-check
+        blk_price_secondary: Optional[float] = None
+        if rec.total_price and rec.quantity:
+            try:
+                t_val = float(re.search(r'[\d.]+', rec.total_price).group())
+                q_m = re.match(r'(\d+)', str(rec.quantity))
+                if q_m and int(q_m.group(1)) > 0:
+                    blk_price_secondary = round(t_val / int(q_m.group(1)), 2)
+            except (ValueError, AttributeError, ZeroDivisionError):
+                pass
+
+        if blk_price_primary is not None and blk_price_secondary is not None:
+            if abs(blk_price_primary - blk_price_secondary) <= 0.02:
+                rec.price = f"{blk_price_primary:.2f} EUR"
+            else:
+                logger.warning(
+                    "OSRAM block %s: price mismatch — Σ(/1PCE)=%.2f vs total/qty=%.2f"
+                    " — using total/qty.",
+                    osram_article, blk_price_primary, blk_price_secondary,
+                )
+                rec.price = f"{blk_price_secondary:.2f} EUR"
+        elif blk_price_primary is not None:
+            rec.price = f"{blk_price_primary:.2f} EUR"
+        elif blk_price_secondary is not None:
+            rec.price = f"{blk_price_secondary:.2f} EUR"
 
         # ── Тегло: Нето / Бруто kg (1st and 2nd values of triplet — 3rd is cbm volume)
         wt_m = _WEIGHT_TRIPLET_RE.search(block_text)
@@ -550,26 +580,58 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
 
-        # ── Unit price: sum ALL "X/ 1 PCE" lines after the article line.
-        # OSRAM invoices split the unit price into net price + recycling fee
-        # (Такса рецикл. ИУЕЕО), each with its own "N,NN/ 1 PCE" entry.
-        # Taking only the first match gives the net-only price; summing all
-        # gives the correct total unit price that matches the position-line total.
+        # ── Total price: rightmost European-format decimal on nearest position line.
+        # Pattern handles thousands separator: '3.105,60' and plain '53,85'.
+        # Must be extracted before the secondary unit-price check below.
+        for bl in reversed(before_lines):
+            if _POS_RE.match(bl.strip()):
+                pm = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', bl.strip())
+                if pm:
+                    raw_total = float(pm.group(1).replace('.', '').replace(',', '.'))
+                    rec.total_price = f"{raw_total:.2f} EUR"
+                break
+
+        # ── Unit price primary: sum ALL "X/ 1 PCE" lines (net price + any fees).
+        # OSRAM invoices list each charge (net price, recycling fee, etc.) as a
+        # separate "N,NN/ 1 PCE" entry; summing them gives the correct unit price.
+        price_primary: Optional[float] = None
         up_matches = _UNIT_PRICE_RE.findall(after_ctx)
         if up_matches:
             try:
-                total_unit = sum(float(p.replace(",", ".")) for p in up_matches)
-                rec.price = f"{round(total_unit, 2):.2f} EUR"
+                price_primary = round(sum(float(p.replace(",", ".")) for p in up_matches), 2)
             except ValueError:
-                rec.price = up_matches[0].replace(",", ".") + " EUR"
+                try:
+                    price_primary = round(float(up_matches[0].replace(",", ".")), 2)
+                except ValueError:
+                    pass
 
-        # ── Total price: rightmost decimal on the nearest position line
-        for bl in reversed(before_lines):
-            if _POS_RE.match(bl.strip()):
-                pm = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', bl.strip())
-                if pm:
-                    rec.total_price = pm.group(1) + " EUR"
-                break
+        # ── Unit price secondary: total_price / quantity (cross-check).
+        price_secondary: Optional[float] = None
+        if rec.total_price and rec.quantity:
+            try:
+                t_val = float(re.search(r'[\d.]+', rec.total_price).group())
+                q_m = re.match(r'(\d+)', str(rec.quantity))
+                if q_m and int(q_m.group(1)) > 0:
+                    price_secondary = round(t_val / int(q_m.group(1)), 2)
+            except (ValueError, AttributeError, ZeroDivisionError):
+                pass
+
+        # Choose price: agree within 0.02 EUR → use primary (Σ /1 PCE values);
+        # mismatch → use secondary (position-line total is authoritative) and warn.
+        if price_primary is not None and price_secondary is not None:
+            if abs(price_primary - price_secondary) <= 0.02:
+                rec.price = f"{price_primary:.2f} EUR"
+            else:
+                logger.warning(
+                    "OSRAM %s: unit price mismatch — Σ(/1PCE)=%.2f vs total/qty=%.2f"
+                    " — using total/qty (position-line total is authoritative).",
+                    osram_article, price_primary, price_secondary,
+                )
+                rec.price = f"{price_secondary:.2f} EUR"
+        elif price_primary is not None:
+            rec.price = f"{price_primary:.2f} EUR"
+        elif price_secondary is not None:
+            rec.price = f"{price_secondary:.2f} EUR"
 
         # ── Weight: net / gross kg (1st and 2nd triplet values; 3rd is cbm)
         wt_m = _WEIGHT_TRIPLET_RE.search(ctx)
