@@ -342,8 +342,9 @@ def extract_via_llm(text: str, llm) -> ProductRecord:
 # Used only for product database lookup — NOT shown as product code
 OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 
-# Position line anchor: 000020, 001110 etc. OR "80-001" sub-line style
-_POS_RE = re.compile(r'^(0{2,5}\d{1,4}|\d{2,3}-\d{3})\b')
+# Position line anchor: 000020, 001110 etc. OR "80-001" sub-line style.
+# Negative lookahead (?!\.\d) excludes sub-number lines like "000045.001".
+_POS_RE = re.compile(r'^(0{2,5}\d{1,4}(?!\.\d)|\d{2,3}-\d{3})\b')
 
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
@@ -537,7 +538,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if not m:
             continue
 
-        before_lines = lines[max(0, i - 15):i]
+        before_lines = lines[max(0, i - 25):i]
         after_lines  = lines[i:min(len(lines), i + 10)]
         ctx_lines    = before_lines + after_lines
         ctx          = "\n".join(ctx_lines)
@@ -574,9 +575,9 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 if len(tokens) >= 2 and re.match(r'^\d{1,5}$', tokens[1]):
                     rec.quantity = tokens[1] + " PCE"
                 break
-        # Fallback: search for explicit "N Брой" in before context
+        # Fallback: search for explicit "N Брой" in full context (before + after)
         if not rec.quantity:
-            for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?)\b', "\n".join(before_lines), re.IGNORECASE):
+            for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?)\b', ctx, re.IGNORECASE):
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
 
