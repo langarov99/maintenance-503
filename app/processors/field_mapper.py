@@ -467,10 +467,14 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
         if qty_m:
             rec.quantity = qty_m.group(1) + " PCE"
 
-        # ── Единична цена: "10,77/ 1 PCE"
-        up_m = _UNIT_PRICE_RE.search(block_text)
-        if up_m:
-            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+        # ── Единична цена: sum all "X/ 1 PCE" lines (net price + recycling fee)
+        up_matches = _UNIT_PRICE_RE.findall(block_text)
+        if up_matches:
+            try:
+                total_unit = sum(float(p.replace(",", ".")) for p in up_matches)
+                rec.price = f"{round(total_unit, 2):.2f} EUR"
+            except ValueError:
+                rec.price = up_matches[0].replace(",", ".") + " EUR"
 
         # ── Обща сума: rightmost decimal on position line (e.g. 53,85)
         total_m = re.search(r'\b(\d{1,6}[.,]\d{2})\s*$', block[0].strip())
@@ -546,11 +550,18 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
 
-        # ── Unit price: "10,77/ 1 PCE" — look only AFTER the article line
-        # (avoids recycling-fee lines that appear before the article)
-        up_m = _UNIT_PRICE_RE.search(after_ctx)
-        if up_m:
-            rec.price = up_m.group(1).replace(",", ".") + " EUR"
+        # ── Unit price: sum ALL "X/ 1 PCE" lines after the article line.
+        # OSRAM invoices split the unit price into net price + recycling fee
+        # (Такса рецикл. ИУЕЕО), each with its own "N,NN/ 1 PCE" entry.
+        # Taking only the first match gives the net-only price; summing all
+        # gives the correct total unit price that matches the position-line total.
+        up_matches = _UNIT_PRICE_RE.findall(after_ctx)
+        if up_matches:
+            try:
+                total_unit = sum(float(p.replace(",", ".")) for p in up_matches)
+                rec.price = f"{round(total_unit, 2):.2f} EUR"
+            except ValueError:
+                rec.price = up_matches[0].replace(",", ".") + " EUR"
 
         # ── Total price: rightmost decimal on the nearest position line
         for bl in reversed(before_lines):
