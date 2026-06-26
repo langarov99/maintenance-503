@@ -473,9 +473,9 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
             raw_total = float(total_m.group(1).replace('.', '').replace(',', '.'))
             rec.total_price = f"{raw_total:.2f} EUR"
 
-        # ── Единична цена primary: sum all "X/ 1 PCE" lines (net + fees)
+        # ── Единична цена primary: sum all "X/ 1 PCE" lines within this block only
         blk_price_primary: Optional[float] = None
-        up_matches = _UNIT_PRICE_RE.findall(block_text)
+        up_matches = _UNIT_PRICE_RE.findall(block_text)  # block is already one product
         if up_matches:
             try:
                 blk_price_primary = round(sum(float(p.replace(",", ".")) for p in up_matches), 2)
@@ -592,10 +592,16 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 break
 
         # ── Unit price primary: sum ALL "X/ 1 PCE" lines (net price + any fees).
-        # OSRAM invoices list each charge (net price, recycling fee, etc.) as a
-        # separate "N,NN/ 1 PCE" entry; summing them gives the correct unit price.
+        # Narrow the search window to stop at the next position line so that
+        # the next product's pricing lines are not included in the sum.
+        price_win_end = len(after_lines)
+        for _j in range(1, len(after_lines)):
+            if _POS_RE.match(after_lines[_j].strip()):
+                price_win_end = _j
+                break
+        price_ctx = "\n".join(after_lines[:price_win_end])
         price_primary: Optional[float] = None
-        up_matches = _UNIT_PRICE_RE.findall(after_ctx)
+        up_matches = _UNIT_PRICE_RE.findall(price_ctx)
         if up_matches:
             try:
                 price_primary = round(sum(float(p.replace(",", ".")) for p in up_matches), 2)

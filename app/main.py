@@ -239,6 +239,13 @@ async def extract(
                 # 2. Try extracted product code when different from AM code
                 if not info and rec.product_code and rec.product_code != am_code:
                     info = db.lookup(rec.product_code)
+                # 2b. OSRAM invoices include the full description after the model code
+                # (e.g. "LEDIL404 LEDINSPECTHEAD TORCH 6X13COSRAM").  When the full
+                # string doesn't match, try the first token alone ("LEDIL404").
+                if not info and rec.product_code and ' ' in rec.product_code:
+                    first_tok = rec.product_code.split()[0]
+                    if first_tok != am_code:
+                        info = db.lookup(first_tok)
                 # 3. Always also try EAN — prefer result that has an internal code
                 if rec.ean:
                     ean_info = db.lookup(rec.ean)
