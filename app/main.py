@@ -254,15 +254,34 @@ async def extract(
                     ):
                         info = ean_info
                 if not info:
-                    ean_in_db = bool(rec.ean and db.lookup(rec.ean))
-                    logger.info(
-                        "OSRAM unmatched: code=%r  am=%r  ean=%r  ean_in_db=%s"
-                        " — %s",
-                        rec.product_code, am_code, rec.ean, ean_in_db,
-                        "EAN not in catalog — add it to the EAN file" if not ean_in_db
-                        else "EAN found but has no internal_code",
-                    )
-                    continue
+                    # Detailed EAN diagnosis
+                    ean_result = None
+                    ean14_result = None
+                    ean13_result = None
+                    if rec.ean:
+                        ean_result = db.lookup(rec.ean)
+                        # Try 13↔14 digit variants in case of leading-zero mismatch
+                        if not ean_result and len(rec.ean) == 13:
+                            ean14_result = db.lookup("0" + rec.ean)
+                        elif not ean_result and len(rec.ean) == 14 and rec.ean.startswith("0"):
+                            ean13_result = db.lookup(rec.ean[1:])
+                        effective = ean_result or ean14_result or ean13_result
+                        if effective:
+                            info = effective
+                            logger.info(
+                                "OSRAM: EAN variant matched %r → internal_code=%r",
+                                rec.ean, effective.internal_code,
+                            )
+                    if not info:
+                        ean_internal = ean_result.internal_code if ean_result else None
+                        logger.info(
+                            "OSRAM unmatched: code=%r  am=%r  ean=%r"
+                            "  ean_in_db=%s  ean_internal=%r",
+                            rec.product_code, am_code, rec.ean,
+                            ean_result is not None, ean_internal,
+                        )
+                    if not info:
+                        continue
                 rec.is_new_product = False
                 # Always use catalog internal code — overrides AM fallback code
                 if info.internal_code and rec.extraction_method == "osram":
