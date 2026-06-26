@@ -254,8 +254,14 @@ async def extract(
                     ):
                         info = ean_info
                 if not info:
-                    logger.info("OSRAM unmatched: code=%r  am=%r  ean=%r",
-                                rec.product_code, am_code, rec.ean)
+                    ean_in_db = bool(rec.ean and db.lookup(rec.ean))
+                    logger.info(
+                        "OSRAM unmatched: code=%r  am=%r  ean=%r  ean_in_db=%s"
+                        " — %s",
+                        rec.product_code, am_code, rec.ean, ean_in_db,
+                        "EAN not in catalog — add it to the EAN file" if not ean_in_db
+                        else "EAN found but has no internal_code",
+                    )
                     continue
                 rec.is_new_product = False
                 # Always use catalog internal code — overrides AM fallback code
