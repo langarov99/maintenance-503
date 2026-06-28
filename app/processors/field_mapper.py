@@ -557,16 +557,27 @@ def _parse_osram_blocks(lines: list[str], block_starts: list[int]) -> list[Produ
     return deduped
 
 
+_POS_NUM_RE = re.compile(r'^(0{2,5}\d{1,4})(?!\.\d)')
+
+
 def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     """Primary extractor: anchor on OSRAM article number (AM/AA prefix codes)."""
     am_hits = sum(1 for l in lines if OSRAM_ARTICLE_RE.search(l.strip()))
     logger.info("OSRAM extraction: %d total lines, %d AM article hits", len(lines), am_hits)
     records = []
 
+    # Collect every position-line number found in the document for gap detection.
+    all_pos_nums: dict[str, str] = {}   # pos_num → full position line text
+    for _l in lines:
+        _pm = _POS_NUM_RE.match(_l.strip())
+        if _pm:
+            all_pos_nums[_pm.group(1)] = _l.strip()
+
     # Track the last seen position line so cross-page products (where the position
     # line is on page N but the article line is on page N+1 separated by headers)
     # can still recover quantity, product_code, and total_price.
-    last_pos: dict = {"quantity": None, "product_code": None, "total_price": None}
+    last_pos: dict = {"quantity": None, "product_code": None, "total_price": None,
+                      "pos_num": None}
 
     for i, line in enumerate(lines):
         # Update last-seen position line as we scan forward.
@@ -579,6 +590,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             _qty = _t[1] if len(_t) >= 2 and re.match(r'^\d{1,5}$', _t[1]) else None
             _pc = _product_code_from_pos_and_next(lines, i)
             _pm = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', _s)
+            _pn = _POS_NUM_RE.match(_s)
             last_pos = {
                 "quantity": _qty,
                 "product_code": _pc,
@@ -586,6 +598,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                     f"{float(_pm.group(1).replace('.', '').replace(',', '.')):.2f} EUR"
                     if _pm else None
                 ),
+                "pos_num": _pn.group(1) if _pn else None,
             }
 
         m = OSRAM_ARTICLE_RE.search(_s)
@@ -653,6 +666,15 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             rec.quantity = last_pos["quantity"] + " PCE"
             logger.info("OSRAM %s: cross-page fallback quantity=%s",
                         osram_article, last_pos["quantity"])
+
+        # ── Record position number for gap detection
+        rec._osram_pos = last_pos.get("pos_num")  # type: ignore[attr-defined]
+        # Try to get pos_num from backward scan too
+        for bl in reversed(before_lines):
+            _pn2 = _POS_NUM_RE.match(bl.strip())
+            if _pn2:
+                rec._osram_pos = _pn2.group(1)  # type: ignore[attr-defined]
+                break
 
         # ── Total price: rightmost European-format decimal on nearest position line.
         # Pattern handles thousands separator: '3.105,60' and plain '53,85'.
@@ -745,6 +767,21 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         else:
             logger.warning("OSRAM: dropped %s — no quantity found. Context: %s",
                            osram_article, " | ".join(before_lines[-4:]))
+
+    # ── Position-sequence gap detection
+    # Compare every position number found in the document against those
+    # matched by the extractor.  Log any that produced no record.
+    matched_pos = {getattr(r, '_osram_pos', None) for r in records}
+    matched_pos.discard(None)
+    unmatched = {k: v for k, v in all_pos_nums.items() if k not in matched_pos}
+    if unmatched:
+        logger.warning(
+            "OSRAM position-gap: %d position(s) found in invoice but produced NO record:\n%s",
+            len(unmatched),
+            "\n".join(f"  {k}: {v[:90]}" for k, v in sorted(unmatched.items())),
+        )
+    else:
+        logger.info("OSRAM position-gap: all %d positions matched (no gaps)", len(all_pos_nums))
 
     seen: dict[str, list[int]] = {}
     deduped: list[ProductRecord] = []
