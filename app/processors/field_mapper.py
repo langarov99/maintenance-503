@@ -725,6 +725,21 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             gross = wt_m.group(2).replace(",", ".")
             rec.weight_kg = f"{net} / {gross} kg"
 
+        # ── total_price fallback: qty × price when position-line total was not found
+        if not rec.total_price and rec.price and rec.quantity:
+            try:
+                p_val = float(re.search(r'[\d.]+', rec.price).group())
+                q_m2  = re.match(r'(\d+)', str(rec.quantity))
+                if q_m2 and int(q_m2.group(1)) > 0:
+                    computed = round(p_val * int(q_m2.group(1)), 2)
+                    rec.total_price = f"{computed:.2f} EUR"
+                    logger.warning("OSRAM %s: total_price missing — computed from price×qty=%s",
+                                   osram_article, rec.total_price)
+            except (ValueError, AttributeError):
+                pass
+        if not rec.total_price:
+            logger.warning("OSRAM %s: total_price is None after all extraction attempts", osram_article)
+
         if rec.quantity:
             records.append(rec)
         else:

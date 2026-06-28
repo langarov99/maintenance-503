@@ -835,24 +835,54 @@ async def extract(
                         logger.info("mafra: desc-match recovery added %d records", added)
 
         # Post-enrichment dedup: two AM codes can resolve to the same internal
-        # product code after DB lookup — keep the record with the most fields.
+        # product code after DB lookup.  Merge quantities and totals so nothing
+        # is lost — same logic as _smart_merge_or_add in field_mapper.
         if any(getattr(r, "extraction_method", "") == "osram" for r in records):
+            import re as _re
             pre = len(records)
-            seen: dict[str, ProductRecord] = {}
+            seen_pe: dict[str, int] = {}   # code → index in deduped
             deduped: list[ProductRecord] = []
             for rec in records:
                 key = rec.product_code
-                if not key:
+                if not key or key not in seen_pe:
+                    if key:
+                        seen_pe[key] = len(deduped)
                     deduped.append(rec)
-                elif key not in seen:
-                    seen[key] = rec
-                    deduped.append(rec)
-                elif rec.filled_count() > seen[key].filled_count():
-                    deduped[deduped.index(seen[key])] = rec
-                    seen[key] = rec
+                else:
+                    existing = deduped[seen_pe[key]]
+                    logger.info(
+                        "Post-enrichment dedup: merging duplicate %s "
+                        "(qty=%s total=%r) into (qty=%s total=%r)",
+                        key, rec.quantity, rec.total_price,
+                        existing.quantity, existing.total_price,
+                    )
+                    # Sum quantities
+                    if rec.quantity and existing.quantity:
+                        try:
+                            em = _re.match(r'(\d+)', existing.quantity)
+                            nm = _re.match(r'(\d+)', str(rec.quantity))
+                            if em and nm:
+                                existing.quantity = _re.sub(
+                                    r'^\d+', str(int(em.group(1)) + int(nm.group(1))),
+                                    existing.quantity, count=1,
+                                )
+                        except Exception:
+                            pass
+                    # Sum totals
+                    if rec.total_price and existing.total_price:
+                        try:
+                            ep = float(existing.total_price.split()[0])
+                            np_ = float(rec.total_price.split()[0])
+                            existing.total_price = f"{ep + np_:.2f} EUR"
+                        except Exception:
+                            pass
+                    elif rec.total_price and not existing.total_price:
+                        existing.total_price = rec.total_price
+                    existing.merged_count += 1
             records = deduped
             if len(records) < pre:
-                logger.info("Post-enrichment dedup: %d → %d records", pre, len(records))
+                logger.info("Post-enrichment dedup: %d → %d records (merged %d)",
+                            pre, len(records), pre - len(records))
 
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename,
                                supplier_recognized=_supplier_recognized)
