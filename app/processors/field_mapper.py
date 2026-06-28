@@ -349,7 +349,7 @@ _POS_RE = re.compile(r'^(0{2,5}\d{1,4}(?!\.\d)|\d{2,3}-\d{3})\b')
 # Numeric-prefix OSRAM product codes embedded at the start of description lines,
 # concatenated with wattage/spec without a separator: "64210DWNBSP-1HB16W12V..."
 # The (?=\d) lookahead stops the match just before the wattage digits begin.
-_OSRAM_NUM_CODE_RE = re.compile(r'^(\d{5}[A-Z]+-\d+[A-Z]+)(?=\d)')
+_OSRAM_NUM_CODE_RE = re.compile(r'^(\d{3,5}[A-Z]+-\d+[A-Z]+)(?=\d)')
 
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
@@ -367,6 +367,7 @@ _UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
 _OSRAM_SPEC_RE = re.compile(
     r'^\d+[.,]\d*[WwVvKk]'   # 1,8W  36V  2700K
     r'|^\d+[WwVvKk]$'         # 4W  12V
+    r'|^\d+/\d+[WwVvKkAa]'   # 35/35W  12/24V
     r'|^PG\d'                  # PG20-1
     r'|^G\d+[.\-/]?\d*$'      # G4  G13
     r'|^E\d+$'                 # E14  E27
@@ -567,11 +568,11 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     records = []
 
     # Collect every position-line number found in the document for gap detection.
-    all_pos_nums: dict[str, str] = {}   # pos_num → full position line text
-    for _l in lines:
+    all_pos_nums: dict[str, tuple[int, str]] = {}   # pos_num → (line_index, line_text)
+    for _li, _l in enumerate(lines):
         _pm = _POS_NUM_RE.match(_l.strip())
         if _pm:
-            all_pos_nums[_pm.group(1)] = _l.strip()
+            all_pos_nums[_pm.group(1)] = (_li, _l.strip())
 
     # Track the last seen position line so cross-page products (where the position
     # line is on page N but the article line is on page N+1 separated by headers)
@@ -777,7 +778,7 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     unmatched = {k: v for k, v in all_pos_nums.items() if k not in matched_pos}
 
     phase2_added = 0
-    for pos_num, pos_line in sorted(unmatched.items()):
+    for pos_num, (pos_line_idx, pos_line) in sorted(unmatched.items()):
         tokens = pos_line.split()
         # Skip position number token(s)
         ti = 0
@@ -788,8 +789,13 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if ti < len(tokens) and re.match(r'^\d{1,5}$', tokens[ti]):
             qty = tokens[ti]
             ti += 1
-        # Product code via standard extractor
+        # Product code via standard extractor; strip concatenated specs from
+        # numeric-prefix codes like "7528ULT-2BL21/5W..." → "7528ULT-2BL"
         pc = _extract_osram_product_code(pos_line)
+        if pc:
+            cleaned = _extract_osram_num_code(pc)
+            if cleaned:
+                pc = cleaned
         # Total price at end of line
         pm2 = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', pos_line.strip())
         total_price: Optional[str] = None
@@ -807,6 +813,16 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         rec2.total_price = total_price
         rec2._osram_article = pc   # type: ignore[attr-defined]
         rec2._osram_pos = pos_num  # type: ignore[attr-defined]
+
+        # Scan next ~6 lines for EAN (sits on the article sub-line below the
+        # position line).  Required for products like 66140CBN whose only
+        # DB key is an EAN — the position line itself has no AM/AA code.
+        ean_scan = "\n".join(lines[pos_line_idx + 1 : pos_line_idx + 7])
+        ean_m2 = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ean_scan)
+        if ean_m2:
+            rec2.ean = ean_m2.group(1)
+            logger.info("OSRAM pos-only %s: found EAN %s in sub-lines", pos_num, ean_m2.group(1))
+
         if total_price and int(qty) > 0:
             try:
                 t2 = float(re.search(r'[\d.]+', total_price).group())
@@ -815,8 +831,8 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 pass
         records.append(rec2)
         phase2_added += 1
-        logger.info("OSRAM pos-only %s: code=%r qty=%s total=%r price=%r",
-                    pos_num, pc, qty, total_price, rec2.price)
+        logger.info("OSRAM pos-only %s: code=%r qty=%s total=%r price=%r ean=%r",
+                    pos_num, pc, qty, total_price, rec2.price, getattr(rec2, 'ean', None))
 
     if phase2_added:
         logger.info("OSRAM Phase-2 (position-only): added %d records", phase2_added)
