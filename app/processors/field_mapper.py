@@ -346,6 +346,11 @@ OSRAM_ARTICLE_RE = re.compile(r'\b((?:AM|AA|4M|ST)\d{6,10}[A-Z0-9]{0,4})\b')
 # Negative lookahead (?!\.\d) excludes sub-number lines like "000045.001".
 _POS_RE = re.compile(r'^(0{2,5}\d{1,4}(?!\.\d)|\d{2,3}-\d{3})\b')
 
+# Numeric-prefix OSRAM product codes embedded at the start of description lines,
+# concatenated with wattage/spec without a separator: "64210DWNBSP-1HB16W12V..."
+# The (?=\d) lookahead stops the match just before the wattage digits begin.
+_OSRAM_NUM_CODE_RE = re.compile(r'^(\d{5}[A-Z]+-\d+[A-Z]+)(?=\d)')
+
 # Weight triplet: "1,200/ 1,232/ 0,009"
 # Invoice columns: Нето (kg) / Брутo (kg) / Обем (cbm)  — take group 1 and 2 (kg only)
 _WEIGHT_TRIPLET_RE = re.compile(
@@ -400,6 +405,30 @@ def _extract_osram_product_code(pos_line: str) -> Optional[str]:
         i += 1
     result = ' '.join(code_tokens).strip()
     return result if len(result) >= 3 else None
+
+
+def _extract_osram_num_code(line: str) -> Optional[str]:
+    """Extract numeric-prefix code from a description line where code and spec are
+    concatenated without a separator, e.g. '64210DWNBSP-1HB16W12VPX26D4X100TRG2OSRAM'
+    → '64210DWNBSP-1HB'. The wattage digits (16W, 13W …) mark the boundary."""
+    m = _OSRAM_NUM_CODE_RE.match(line.strip())
+    return m.group(1) if m else None
+
+
+def _product_code_from_pos_and_next(lines: list[str], pos_idx: int) -> Optional[str]:
+    """Try to extract product code from position line and the 1-3 lines that follow it."""
+    pc = _extract_osram_product_code(lines[pos_idx])
+    for la in range(1, 4):
+        if pc:
+            break
+        next_idx = pos_idx + la
+        if next_idx >= len(lines):
+            break
+        nxt = lines[next_idx].strip()
+        if not nxt or _POS_RE.match(nxt):  # blank or next product's position line
+            break
+        pc = _extract_osram_product_code(lines[next_idx]) or _extract_osram_num_code(nxt)
+    return pc
 
 
 def _is_osram_document(text: str) -> bool:
@@ -541,11 +570,14 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
 
     for i, line in enumerate(lines):
         # Update last-seen position line as we scan forward.
+        # Also checks the 1-3 lines after the position line for the product code,
+        # which is needed when the code is on a description line (e.g. for LED
+        # downlights where the code is concatenated with the spec string).
         _s = line.strip()
         if _POS_RE.match(_s):
             _t = _s.split()
             _qty = _t[1] if len(_t) >= 2 and re.match(r'^\d{1,5}$', _t[1]) else None
-            _pc = _extract_osram_product_code(line)
+            _pc = _product_code_from_pos_and_next(lines, i)
             _pm = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', _s)
             last_pos = {
                 "quantity": _qty,
@@ -578,14 +610,17 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if ean_m:
             rec.ean = ean_m.group(1)
 
-        # ── Product code: from nearest position line in backward scan
-        for bl in reversed(before_lines):
+        # ── Product code: from nearest position line + its description line(s)
+        for idx_r, bl in enumerate(reversed(before_lines)):
             if _POS_RE.match(bl.strip()):
-                pc = _extract_osram_product_code(bl)
+                pos_idx_in_before = len(before_lines) - 1 - idx_r
+                # Global line index of this position line
+                global_pos_idx = max(0, i - 25) + pos_idx_in_before
+                pc = _product_code_from_pos_and_next(lines, global_pos_idx)
                 if pc:
                     rec.product_code = pc
                 break
-        # Cross-page fallback: use last-seen position line
+        # Cross-page fallback: use last-seen position line (captured during forward scan)
         if not rec.product_code:
             if last_pos["product_code"]:
                 rec.product_code = last_pos["product_code"]
