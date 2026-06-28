@@ -768,19 +768,59 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.warning("OSRAM: dropped %s — no quantity found. Context: %s",
                            osram_article, " | ".join(before_lines[-4:]))
 
-    # ── Position-sequence gap detection
-    # Compare every position number found in the document against those
-    # matched by the extractor.  Log any that produced no record.
+    # ── Position-sequence gap detection + Phase-2 extraction
+    # Products like traditional halogen/auxiliary bulbs (2721, 64210, 7528…)
+    # have NO AM/AA article code in the invoice — their catalog code sits
+    # directly on the position line.  Collect these and extract them now.
     matched_pos = {getattr(r, '_osram_pos', None) for r in records}
     matched_pos.discard(None)
     unmatched = {k: v for k, v in all_pos_nums.items() if k not in matched_pos}
-    if unmatched:
-        logger.warning(
-            "OSRAM position-gap: %d position(s) found in invoice but produced NO record:\n%s",
-            len(unmatched),
-            "\n".join(f"  {k}: {v[:90]}" for k, v in sorted(unmatched.items())),
-        )
-    else:
+
+    phase2_added = 0
+    for pos_num, pos_line in sorted(unmatched.items()):
+        tokens = pos_line.split()
+        # Skip position number token(s)
+        ti = 0
+        while ti < len(tokens) and _POS_NUM_RE.match(tokens[ti]):
+            ti += 1
+        # Quantity: next pure-integer token
+        qty: Optional[str] = None
+        if ti < len(tokens) and re.match(r'^\d{1,5}$', tokens[ti]):
+            qty = tokens[ti]
+            ti += 1
+        # Product code via standard extractor
+        pc = _extract_osram_product_code(pos_line)
+        # Total price at end of line
+        pm2 = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', pos_line.strip())
+        total_price: Optional[str] = None
+        if pm2:
+            total_price = f"{float(pm2.group(1).replace('.', '').replace(',', '.')):.2f} EUR"
+
+        if not pc or not qty:
+            logger.warning("OSRAM pos-only %s: cannot extract code/qty — skipping: %s",
+                           pos_num, pos_line[:80])
+            continue
+
+        rec2 = ProductRecord(extraction_method="osram")
+        rec2.product_code = pc
+        rec2.quantity = qty + " PCE"
+        rec2.total_price = total_price
+        rec2._osram_article = pc   # type: ignore[attr-defined]
+        rec2._osram_pos = pos_num  # type: ignore[attr-defined]
+        if total_price and int(qty) > 0:
+            try:
+                t2 = float(re.search(r'[\d.]+', total_price).group())
+                rec2.price = f"{round(t2 / int(qty), 2):.2f} EUR"
+            except (ValueError, AttributeError, ZeroDivisionError):
+                pass
+        records.append(rec2)
+        phase2_added += 1
+        logger.info("OSRAM pos-only %s: code=%r qty=%s total=%r price=%r",
+                    pos_num, pc, qty, total_price, rec2.price)
+
+    if phase2_added:
+        logger.info("OSRAM Phase-2 (position-only): added %d records", phase2_added)
+    elif not unmatched:
         logger.info("OSRAM position-gap: all %d positions matched (no gaps)", len(all_pos_nums))
 
     seen: dict[str, list[int]] = {}
