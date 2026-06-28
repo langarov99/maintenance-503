@@ -533,8 +533,30 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     am_hits = sum(1 for l in lines if OSRAM_ARTICLE_RE.search(l.strip()))
     logger.info("OSRAM extraction: %d total lines, %d AM article hits", len(lines), am_hits)
     records = []
+
+    # Track the last seen position line so cross-page products (where the position
+    # line is on page N but the article line is on page N+1 separated by headers)
+    # can still recover quantity, product_code, and total_price.
+    last_pos: dict = {"quantity": None, "product_code": None, "total_price": None}
+
     for i, line in enumerate(lines):
-        m = OSRAM_ARTICLE_RE.search(line.strip())
+        # Update last-seen position line as we scan forward.
+        _s = line.strip()
+        if _POS_RE.match(_s):
+            _t = _s.split()
+            _qty = _t[1] if len(_t) >= 2 and re.match(r'^\d{1,5}$', _t[1]) else None
+            _pc = _extract_osram_product_code(line)
+            _pm = re.search(r'\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*$', _s)
+            last_pos = {
+                "quantity": _qty,
+                "product_code": _pc,
+                "total_price": (
+                    f"{float(_pm.group(1).replace('.', '').replace(',', '.')):.2f} EUR"
+                    if _pm else None
+                ),
+            }
+
+        m = OSRAM_ARTICLE_RE.search(_s)
         if not m:
             continue
 
@@ -556,30 +578,46 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if ean_m:
             rec.ean = ean_m.group(1)
 
-        # ── Product code: "LEDPWL ACC 103 30X1" style — from position line
+        # ── Product code: from nearest position line in backward scan
         for bl in reversed(before_lines):
             if _POS_RE.match(bl.strip()):
                 pc = _extract_osram_product_code(bl)
                 if pc:
                     rec.product_code = pc
                 break
+        # Cross-page fallback: use last-seen position line
         if not rec.product_code:
-            rec.product_code = osram_article  # fallback
+            if last_pos["product_code"]:
+                rec.product_code = last_pos["product_code"]
+                logger.info("OSRAM %s: cross-page fallback product_code=%r",
+                            osram_article, rec.product_code)
+            else:
+                rec.product_code = osram_article  # final fallback
 
         # ── Quantity: 2nd token on position line (000NNN  QTY  description...)
-        # Iterate backwards through lines before the article to find nearest pos line
         for bl in reversed(before_lines):
             if _POS_RE.match(bl.strip()):
                 tokens = bl.strip().split()
-                # tokens[0]=position, tokens[1]=quantity (pure digits)
                 if len(tokens) >= 2 and re.match(r'^\d{1,5}$', tokens[1]):
                     rec.quantity = tokens[1] + " PCE"
                 break
-        # Fallback: search for explicit "N Брой" in full context (before + after)
+        # Fallback: "N Брой" anywhere in full context
         if not rec.quantity:
             for qty_m in re.finditer(r'\b(\d+)\s*(?:Брой|бр\.?)\b', ctx, re.IGNORECASE):
                 rec.quantity = qty_m.group(1) + " PCE"
                 break
+        # Fallback: "(N)" sub-line pattern on page N+1 — e.g. "480  (4)  48,56/1 PCE"
+        if not rec.quantity:
+            paren_m = re.search(r'^\s*\d+\s+\((\d+)\)\b', "\n".join(after_lines), re.MULTILINE)
+            if paren_m:
+                rec.quantity = paren_m.group(1) + " PCE"
+                logger.info("OSRAM %s: paren-quantity fallback quantity=%s",
+                            osram_article, paren_m.group(1))
+        # Cross-page fallback: use last-seen position line
+        if not rec.quantity and last_pos["quantity"]:
+            rec.quantity = last_pos["quantity"] + " PCE"
+            logger.info("OSRAM %s: cross-page fallback quantity=%s",
+                        osram_article, last_pos["quantity"])
 
         # ── Total price: rightmost European-format decimal on nearest position line.
         # Pattern handles thousands separator: '3.105,60' and plain '53,85'.
@@ -591,6 +629,11 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                     raw_total = float(pm.group(1).replace('.', '').replace(',', '.'))
                     rec.total_price = f"{raw_total:.2f} EUR"
                 break
+        # Cross-page fallback: use last-seen position line
+        if not rec.total_price and last_pos["total_price"]:
+            rec.total_price = last_pos["total_price"]
+            logger.info("OSRAM %s: cross-page fallback total_price=%r",
+                        osram_article, rec.total_price)
 
         # ── Unit price primary: sum ALL "X/ 1 PCE" lines (net price + any fees).
         # Narrow the search window to stop at the next position line so that
