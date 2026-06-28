@@ -574,6 +574,22 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if _pm:
             all_pos_nums[_pm.group(1)] = (_li, _l.strip())
 
+    # Forward pre-scan: build phase1_pos_nums and am_line_to_pos BEFORE Phase-1
+    # loop so that _osram_pos can be set reliably from the pre-scan map rather
+    # than an unreliable backward scan.
+    _pos_by_line = sorted(
+        (line_idx, pn) for pn, (line_idx, _) in all_pos_nums.items()
+    )
+    phase1_pos_nums: set[str] = set()
+    am_line_to_pos: dict[int, str] = {}   # AM article line index → position number
+    for _k, (_li, _pn) in enumerate(_pos_by_line):
+        _next_li = _pos_by_line[_k + 1][0] if _k + 1 < len(_pos_by_line) else len(lines)
+        for _j in range(_li + 1, _next_li):
+            if OSRAM_ARTICLE_RE.search(lines[_j].strip()):
+                phase1_pos_nums.add(_pn)
+                am_line_to_pos[_j] = _pn
+                break
+
     # Track the last seen position line so cross-page products (where the position
     # line is on page N but the article line is on page N+1 separated by headers)
     # can still recover quantity, product_code, and total_price.
@@ -668,14 +684,8 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.info("OSRAM %s: cross-page fallback quantity=%s",
                         osram_article, last_pos["quantity"])
 
-        # ── Record position number for gap detection
-        rec._osram_pos = last_pos.get("pos_num")  # type: ignore[attr-defined]
-        # Try to get pos_num from backward scan too
-        for bl in reversed(before_lines):
-            _pn2 = _POS_NUM_RE.match(bl.strip())
-            if _pn2:
-                rec._osram_pos = _pn2.group(1)  # type: ignore[attr-defined]
-                break
+        # ── Record position number (from pre-scan map; fallback to last_pos)
+        rec._osram_pos = am_line_to_pos.get(i) or last_pos.get("pos_num")  # type: ignore[attr-defined]
 
         # ── Total price: rightmost European-format decimal on nearest position line.
         # Pattern handles thousands separator: '3.105,60' and plain '53,85'.
@@ -781,16 +791,6 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     # which fails for cross-page products (article on next page after a page
     # break) and can cause double-counting when a Phase-1 backward scan
     # mistakenly picks up a Phase-2 position line's total.
-    _pos_by_line = sorted(
-        (line_idx, pn) for pn, (line_idx, _) in all_pos_nums.items()
-    )
-    phase1_pos_nums: set[str] = set()
-    for _k, (_li, _pn) in enumerate(_pos_by_line):
-        _next_li = _pos_by_line[_k + 1][0] if _k + 1 < len(_pos_by_line) else len(lines)
-        for _j in range(_li + 1, _next_li):
-            if OSRAM_ARTICLE_RE.search(lines[_j].strip()):
-                phase1_pos_nums.add(_pn)
-                break
     unmatched = {k: v for k, v in all_pos_nums.items() if k not in phase1_pos_nums}
     logger.info("OSRAM gap detection: %d Phase-1 positions, %d Phase-2 positions",
                 len(phase1_pos_nums), len(unmatched))
@@ -869,6 +869,9 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         logger.info("OSRAM Phase-2 (position-only): added %d records", phase2_added)
     elif not unmatched:
         logger.info("OSRAM position-gap: all %d positions matched (no gaps)", len(all_pos_nums))
+
+    # Sort by invoice position number so export order matches the invoice.
+    records.sort(key=lambda r: getattr(r, '_osram_pos', None) or '999999')
 
     seen: dict[str, list[int]] = {}
     deduped: list[ProductRecord] = []
