@@ -773,9 +773,27 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     # Products like traditional halogen/auxiliary bulbs (2721, 64210, 7528…)
     # have NO AM/AA article code in the invoice — their catalog code sits
     # directly on the position line.  Collect these and extract them now.
-    matched_pos = {getattr(r, '_osram_pos', None) for r in records}
-    matched_pos.discard(None)
-    unmatched = {k: v for k, v in all_pos_nums.items() if k not in matched_pos}
+    #
+    # Gap detection: forward-scan approach.  For each position line scan
+    # forward up to the next position line; if an AM/AA article code appears
+    # in that window the position is a Phase-1 product, otherwise Phase-2.
+    # This is more reliable than the _osram_pos backward-assignment approach,
+    # which fails for cross-page products (article on next page after a page
+    # break) and can cause double-counting when a Phase-1 backward scan
+    # mistakenly picks up a Phase-2 position line's total.
+    _pos_by_line = sorted(
+        (line_idx, pn) for pn, (line_idx, _) in all_pos_nums.items()
+    )
+    phase1_pos_nums: set[str] = set()
+    for _k, (_li, _pn) in enumerate(_pos_by_line):
+        _next_li = _pos_by_line[_k + 1][0] if _k + 1 < len(_pos_by_line) else len(lines)
+        for _j in range(_li + 1, _next_li):
+            if OSRAM_ARTICLE_RE.search(lines[_j].strip()):
+                phase1_pos_nums.add(_pn)
+                break
+    unmatched = {k: v for k, v in all_pos_nums.items() if k not in phase1_pos_nums}
+    logger.info("OSRAM gap detection: %d Phase-1 positions, %d Phase-2 positions",
+                len(phase1_pos_nums), len(unmatched))
 
     phase2_added = 0
     for pos_num, (pos_line_idx, pos_line) in sorted(unmatched.items()):
@@ -817,8 +835,21 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         # Scan next ~6 lines for EAN (sits on the article sub-line below the
         # position line).  Required for products like 66140CBN whose only
         # DB key is an EAN — the position line itself has no AM/AA code.
-        ean_scan = "\n".join(lines[pos_line_idx + 1 : pos_line_idx + 7])
-        ean_m2 = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', ean_scan)
+        # Stop immediately at a new position line or a line with an AM code
+        # (which belongs to the NEXT Phase-1 product, not this one).
+        ean_m2 = None
+        for _scan_ln in lines[pos_line_idx + 1 : pos_line_idx + 7]:
+            _sl = _scan_ln.strip()
+            if not _sl:
+                continue
+            if _POS_RE.match(_sl):          # next product's position line
+                break
+            if OSRAM_ARTICLE_RE.search(_sl):  # AM code → next Phase-1 product
+                break
+            _ean_hit = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', _sl)
+            if _ean_hit:
+                ean_m2 = _ean_hit
+                break
         if ean_m2:
             rec2.ean = ean_m2.group(1)
             logger.info("OSRAM pos-only %s: found EAN %s in sub-lines", pos_num, ean_m2.group(1))
