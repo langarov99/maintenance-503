@@ -896,13 +896,35 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
     # Sort by invoice position number so export order matches the invoice.
     records.sort(key=lambda r: getattr(r, '_osram_pos', None) or '999999')
 
+    # Position-pair dedup: one OSRAM position block can contain multiple AM sub-codes
+    # (e.g. left indicator + right indicator + wiring harness).  All sub-codes extract
+    # the SAME product_code from the shared position line, so _smart_merge_or_add would
+    # sum their quantities (4+4+4=12) and totals (211×3=633) — wrong.
+    # Solution: keep only the FIRST record per (product_code, _osram_pos) pair.
+    # Records without a position number pass through unchanged (safety net).
+    _seen_pos_pairs: set[tuple] = set()
+    _pos_deduped: list[ProductRecord] = []
+    for r in records:
+        _pos = getattr(r, '_osram_pos', None)
+        _code = r.product_code
+        if _pos and _code:
+            _pair = (_code, _pos)
+            if _pair in _seen_pos_pairs:
+                logger.info("OSRAM: dropping sub-article duplicate code=%r pos=%s", _code, _pos)
+                continue
+            _seen_pos_pairs.add(_pair)
+        _pos_deduped.append(r)
+    if len(_pos_deduped) < len(records):
+        logger.info("OSRAM position-pair dedup: %d → %d (removed %d sub-article duplicates)",
+                    len(records), len(_pos_deduped), len(records) - len(_pos_deduped))
+
     seen: dict[str, list[int]] = {}
     deduped: list[ProductRecord] = []
-    for r in records:
+    for r in _pos_deduped:
         _smart_merge_or_add(deduped, seen, r)
-    if len(deduped) < len(records):
+    if len(deduped) < len(_pos_deduped):
         logger.info("OSRAM dedup: %d → %d (removed/merged %d duplicates)",
-                    len(records), len(deduped), len(records) - len(deduped))
+                    len(_pos_deduped), len(deduped), len(_pos_deduped) - len(deduped))
     return deduped
 
 
