@@ -303,6 +303,15 @@ async def extract(
                     info = rp_db.lookup(rec.product_code)
                     if not info and rec.ean:
                         info = rp_db.lookup(rec.ean)
+                    # Fallback: some invoice codes lack a trailing letter suffix
+                    # (e.g. invoice has "103103" but DB stores "103103R").
+                    # Try appending 'R' when the plain lookup fails.
+                    if not info and rec.product_code and not rec.product_code.endswith('R'):
+                        r_code = rec.product_code + 'R'
+                        info = rp_db.lookup(r_code)
+                        if info:
+                            logger.info("Rezaw-Plast: remapped %r → %r", rec.product_code, r_code)
+                            rec.product_code = r_code
                     if not info:
                         continue
                     rec.is_new_product = False
