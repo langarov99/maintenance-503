@@ -914,6 +914,35 @@ async def extract(
                 logger.info("Post-enrichment dedup: %d → %d records (merged %d)",
                             pre, len(records), pre - len(records))
 
+            # Consistency check: qty × price must equal total_price.
+            # When a record with total=None was merged in, qty is over-counted
+            # (e.g. 100 + 10 = 110) but total stays at 61.00 instead of 67.10.
+            # If the mismatch exceeds 0.05 EUR, recalculate qty = round(total / price).
+            for _rec in records:
+                if not (_rec.price and _rec.quantity and _rec.total_price):
+                    continue
+                try:
+                    _pv = float(_rec.price.split()[0])
+                    _qm = _re.match(r'(\d+)', str(_rec.quantity))
+                    _tv = float(_rec.total_price.split()[0])
+                    if not _qm or _pv <= 0 or _tv <= 0:
+                        continue
+                    _qv = int(_qm.group(1))
+                    _expected = round(_pv * _qv, 2)
+                    if abs(_expected - _tv) > 0.05:
+                        _calc_qty = round(_tv / _pv)
+                        if _calc_qty > 0 and abs(round(_calc_qty * _pv, 2) - _tv) <= 0.05:
+                            logger.warning(
+                                "OSRAM %s: qty×price mismatch (%d × %.2f = %.2f ≠ total %.2f)"
+                                " — correcting qty %d → %d",
+                                _rec.product_code, _qv, _pv, _expected, _tv, _qv, _calc_qty,
+                            )
+                            _rec.quantity = _re.sub(
+                                r'^\d+', str(_calc_qty), _rec.quantity, count=1
+                            )
+                except Exception:
+                    pass
+
         out_path = write_excel(records, str(OUTPUT_DIR), file.filename,
                                supplier_recognized=_supplier_recognized)
         _records_cache[Path(out_path).name] = records
