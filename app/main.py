@@ -917,7 +917,8 @@ async def extract(
             # Consistency check: qty × price must equal total_price.
             # When a record with total=None was merged in, qty is over-counted
             # (e.g. 100 + 10 = 110) but total stays at 61.00 instead of 67.10.
-            # If the mismatch exceeds 0.05 EUR, recalculate qty = round(total / price).
+            # Step 1: if qty × price ≠ total, try correcting qty = round(total / price).
+            # Step 2: always recalculate unit price = total / qty so the export is consistent.
             for _rec in records:
                 if not (_rec.price and _rec.quantity and _rec.total_price):
                     continue
@@ -930,6 +931,7 @@ async def extract(
                     _qv = int(_qm.group(1))
                     _expected = round(_pv * _qv, 2)
                     if abs(_expected - _tv) > 0.05:
+                        # Step 1: try to correct qty first
                         _calc_qty = round(_tv / _pv)
                         if _calc_qty > 0 and abs(round(_calc_qty * _pv, 2) - _tv) <= 0.05:
                             logger.warning(
@@ -940,6 +942,17 @@ async def extract(
                             _rec.quantity = _re.sub(
                                 r'^\d+', str(_calc_qty), _rec.quantity, count=1
                             )
+                            _qv = _calc_qty
+                        # Step 2: recalculate unit price = total / qty (ground truth)
+                        _correct_price = round(_tv / _qv, 4)
+                        if abs(_correct_price - _pv) > 0.0001:
+                            logger.warning(
+                                "OSRAM %s: unit price mismatch (%.4f ≠ total %.2f / qty %d = %.4f)"
+                                " — correcting price %.4f → %.4f",
+                                _rec.product_code, _pv, _tv, _qv, _correct_price,
+                                _pv, _correct_price,
+                            )
+                            _rec.price = f"{_correct_price:.2f} EUR"
                 except Exception:
                     pass
 
