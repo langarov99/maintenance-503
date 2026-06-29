@@ -837,18 +837,39 @@ async def extract(
         # Post-enrichment dedup: two AM codes can resolve to the same internal
         # product code after DB lookup.  Merge quantities and totals so nothing
         # is lost — same logic as _smart_merge_or_add in field_mapper.
+        #
+        # Position-pair guard: if two records share the same _osram_pos AND the
+        # same enriched code they are sub-article duplicates from the same invoice
+        # position block (e.g. left + right headlight both enriching to LEDHL109-BK).
+        # In that case we DROP the second record instead of summing — the position
+        # line's qty/total already represents the full position.  Records from
+        # DIFFERENT positions with the same code are still merged normally.
         if any(getattr(r, "extraction_method", "") == "osram" for r in records):
             import re as _re
             pre = len(records)
-            seen_pe: dict[str, int] = {}   # code → index in deduped
+            seen_pe: dict[str, int] = {}         # code → index in deduped
+            seen_pe_pos: dict[str, set] = {}     # code → set of osram positions already seen
             deduped: list[ProductRecord] = []
             for rec in records:
                 key = rec.product_code
+                _pos = getattr(rec, "_osram_pos", None)
                 if not key or key not in seen_pe:
                     if key:
                         seen_pe[key] = len(deduped)
+                        seen_pe_pos[key] = {_pos} if _pos else set()
                     deduped.append(rec)
                 else:
+                    # Same code seen before — check position to decide merge vs drop
+                    if _pos and _pos in seen_pe_pos.get(key, set()):
+                        # Same position block: sub-article duplicate — drop silently
+                        logger.info(
+                            "Post-enrichment dedup: dropping sub-article duplicate %s pos=%s",
+                            key, _pos,
+                        )
+                        continue
+                    # Different position (or no position info): merge normally
+                    if _pos:
+                        seen_pe_pos.setdefault(key, set()).add(_pos)
                     existing = deduped[seen_pe[key]]
                     logger.info(
                         "Post-enrichment dedup: merging duplicate %s "
