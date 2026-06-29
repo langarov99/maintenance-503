@@ -1018,12 +1018,22 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
             return str(row[idx] or "").strip()
 
         article_raw = cell(art_idx)
-        # Some cells contain two codes: "210601 / 211201" — take the first
-        art_m = re.match(r'(\d{3,8})', article_raw)
-        # Skip brand/section header rows (no numeric article number)
+        # Handle "two codes in one cell": "210601 / 211201" → take the first.
+        # Split only on space-slash-space to avoid breaking codes like "232110/B".
+        if ' / ' in article_raw:
+            article_raw = article_raw.split(' / ')[0].strip()
+        # Match full article code: digits with optional /letter(s) suffix (e.g. 232110/B).
+        art_m = re.match(r'(\d{3,8}(?:/[A-Za-z0-9]+)?)', article_raw)
         if not art_m:
-            continue
-        article = art_m.group(1)
+            # Non-numeric code (e.g. "palet" surcharge row) — keep as-is unless
+            # it looks like a repeated header cell.
+            if not article_raw or article_raw.lower() in {
+                'article', 'indeks', 'indeks/article', 'kod', 'number', 'code'
+            }:
+                continue
+            article = article_raw
+        else:
+            article = art_m.group(1)
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = article
