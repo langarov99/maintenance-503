@@ -5281,9 +5281,6 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
 
     for i, line in enumerate(lines):
         m = full_row_re.match(line.strip())
-        if not m and i + 1 < len(lines):
-            # Description may wrap to the next line — try combining both
-            m = full_row_re.match((line.strip() + ' ' + lines[i + 1].strip()))
         if not m:
             continue
 
