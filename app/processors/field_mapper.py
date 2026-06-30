@@ -5271,7 +5271,12 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
         except (ValueError, AttributeError):
             return None
 
+    # Diagnostic: log the first 30 lines so we can see the actual text layout
+    logger.info("Hakr text dump (first 30 lines):\n%s",
+                '\n'.join(f"  [{k:03d}] {repr(ln)}" for k, ln in enumerate(lines[:30])))
+
     i = 0
+    _diag_done = False
     while i < len(lines):
         cm = code_re.match(lines[i].strip())
         if not cm:
@@ -5280,6 +5285,14 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
 
         code = cm.group(1).upper()
         name = cm.group(2).strip()
+
+        # Diagnostic: log context around first code match
+        if not _diag_done:
+            _diag_done = True
+            logger.info("Hakr text first code=%s at line %d; context:\n%s",
+                        code, i,
+                        '\n'.join(f"  [{k:03d}] {repr(lines[k])}"
+                                  for k in range(i, min(i + 6, len(lines)))))
 
         # Try to find numeric data on the same line first, then the next 1-2 lines
         data_m = data_re.search(lines[i])
