@@ -5285,6 +5285,8 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
             continue
 
         code = m.group(1).strip().upper()
+        # Normalize variant suffix: "HV1122 - E" → "HV1122E"
+        code = re.sub(r'\s+-\s+', '', code)
         name = m.group(2).strip()[:120] or None
         qty = m.group(3)
         up = _to_float(m.group(4))
