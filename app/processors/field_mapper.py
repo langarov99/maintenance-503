@@ -5250,69 +5250,64 @@ def _parse_hakr_table(table: list[list]) -> list[ProductRecord]:
 def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
     """Text fallback for Hakr invoices.
 
-    Handles multi-line descriptions: scans for a line starting with CODE:Name,
-    then looks ahead up to 2 lines for the numeric data (qty pcs / price / total).
+    Uses a single full-row regex: everything before the colon is the product code,
+    everything after is the name until the Npcs data block.  This handles any code
+    format (HV codes, mKayak L, adaptér, etc.) without enumerating patterns.
+
+    Thousands commas in amounts (e.g. 1,370.00) are stripped before float conversion.
     """
     lines = [ln for ln in text.splitlines() if ln.strip()]
     records: list[ProductRecord] = []
     seen: set[str] = set()
 
-    # Code line: CODE:name  or  CODE :name  or  CODE - E:name  (variant suffix allowed)
-    code_re = re.compile(
-        r'^([A-Za-z]{1,8}\d{2,10}(?:\s*-\s*[A-Za-z0-9]+)?)\s*:(.*)$',
-        re.IGNORECASE
-    )
-    # Data: N pcs (no space between N and pcs)  unit_price  price  VAT%  VAT  total
-    data_re = re.compile(
-        r'(\d+)\s*pcs\s+([\d.,]+)\s+([\d.,]+)\s+\d+%\s+[\d.,]+\s+([\d.,]+)',
+    # Full product row in one pass:
+    #   group 1 = code  (lazy: shortest text before the colon)
+    #   group 2 = name  (lazy: shortest text before qty-pcs block)
+    #   group 3 = qty
+    #   group 4 = unit price
+    #   group 5 = line price (= unit × qty, ignored)
+    #   group 6 = total
+    full_row_re = re.compile(
+        r'^(.+?)\s*:(.+?)\s+(\d+)\s*pcs\s+([\d.,]+)\s+([\d.,]+)\s+\d+%\s+[\d.,]+\s+([\d.,]+)',
         re.IGNORECASE
     )
 
     def _to_float(s: str) -> Optional[float]:
         try:
-            return float(s.replace(',', '.'))
+            # Strip thousands commas: "1,370.00" → "1370.00" (decimal stays as-is)
+            return float(s.replace(',', ''))
         except (ValueError, AttributeError):
             return None
 
-    i = 0
-    while i < len(lines):
-        cm = code_re.match(lines[i].strip())
-        if not cm:
-            i += 1
+    for i, line in enumerate(lines):
+        m = full_row_re.match(line.strip())
+        if not m and i + 1 < len(lines):
+            # Description may wrap to the next line — try combining both
+            m = full_row_re.match((line.strip() + ' ' + lines[i + 1].strip()))
+        if not m:
             continue
 
-        code = cm.group(1).upper()
-        name = cm.group(2).strip()
+        code = m.group(1).strip().upper()
+        name = m.group(2).strip()[:120] or None
+        qty = m.group(3)
+        up = _to_float(m.group(4))
+        tot = _to_float(m.group(6))
 
-        # Try to find numeric data on the same line first, then the next 1-2 lines
-        data_m = data_re.search(lines[i])
-        j = i + 1
-        while data_m is None and j < min(i + 3, len(lines)):
-            cont = lines[j].strip()
-            if code_re.match(cont):
-                break  # Next product — stop looking
-            data_m = data_re.search(cont)
-            if not data_m:
-                name = (name + ' ' + cont).strip()  # Continuation of description
-            j += 1
+        if code in seen:
+            continue
+        seen.add(code)
 
-        if code not in seen:
-            seen.add(code)
-            rec = ProductRecord(extraction_method="table")
-            rec.product_code = code
-            rec.product_name = name[:120] or None
-            if data_m:
-                rec.quantity = data_m.group(1)
-                up = _to_float(data_m.group(2))
-                tot = _to_float(data_m.group(4))
-                if up is not None:
-                    rec.price = f"{up:.2f} EUR"
-                if tot is not None:
-                    rec.total_price = f"{tot:.2f} EUR"
-            records.append(rec)
-            logger.info("Hakr text: code=%s qty=%s price=%s total=%s",
-                        code, rec.quantity, rec.price, rec.total_price)
-        i += 1
+        rec = ProductRecord(extraction_method="table")
+        rec.product_code = code
+        rec.product_name = name
+        if qty:
+            rec.quantity = qty
+        if up is not None:
+            rec.price = f"{up:.2f} EUR"
+        if tot is not None:
+            rec.total_price = f"{tot:.2f} EUR"
+        records.append(rec)
+        logger.info("Hakr text: code=%s qty=%s price=%s total=%s", code, qty, up, tot)
 
     return records
 
