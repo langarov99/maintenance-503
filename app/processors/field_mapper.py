@@ -5145,119 +5145,171 @@ def _is_hakr_document(text: str) -> bool:
 def _parse_hakr_table(table: list[list]) -> list[ProductRecord]:
     """Parse one pdfplumber table from a Hakr invoice.
 
-    Scans every row for a cell matching CODE:Name format (e.g. HV5902:Speed - ALU BLACK).
+    Handles multi-line cells: pdfplumber sometimes splits a wrapped row into two
+    physical rows — the code appears in the first sub-row (with empty numeric cols)
+    and the qty/price/total appear in the continuation sub-row.
+
     Column layout: Description | Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
     """
     if not table:
         return []
 
-    records = []
+    ncols = max(len(r) for r in table) if table else 0
+    logger.debug("Hakr: table %d rows × %d cols; first row: %r",
+                 len(table), ncols, [str(c or "")[:40] for c in table[0]] if table else [])
+
+    records: list[ProductRecord] = []
+    pending_rec: Optional[ProductRecord] = None  # code found; waiting for numeric data
+    pending_base: int = 0                         # desc_col of the pending record
+
     for row in table:
         if not any(str(c or "").strip() for c in row):
             continue
 
-        # Find the cell that contains CODE:Name
+        # Find cell matching CODE:Name (allow optional space before colon, e.g. "HV2401 :")
         desc = ""
-        desc_col = None
+        desc_col: Optional[int] = None
         for ci, c in enumerate(row):
             s = re.sub(r'\s+', ' ', str(c or "")).strip()
-            if ':' in s and re.match(r'^[A-Za-z]{1,6}\d{3,8}:', s):
+            if re.match(r'^[A-Za-z]{1,8}\d{2,10}\s*:', s):
                 desc = s
                 desc_col = ci
                 break
-        if not desc or desc_col is None:
-            continue
 
-        colon = desc.index(':')
-        code_raw = desc[:colon].strip()
-        name     = desc[colon + 1:].strip()[:120] or None
-
-        # Skip total/summary rows (negative amounts or non-product codes)
-        if not re.match(r'^[A-Za-z]{1,6}\d{3,8}$', code_raw):
-            continue
-
-        # Expected layout after desc_col: Q'ty | Unit price | Discount | Price | %VAT | VAT | Total
-        def cell(offset):
-            idx = desc_col + offset
-            if idx >= len(row):
+        def _cell(offset: int, base: Optional[int] = None) -> str:
+            b = base if base is not None else (desc_col or 0)
+            idx = b + offset
+            if idx < 0 or idx >= len(row):
                 return ""
             return re.sub(r'\s+', ' ', str(row[idx] or "")).strip()
 
-        qty_m = re.match(r'(\d+)', cell(1))
-        qty = qty_m.group(1) if qty_m else None
+        if desc and desc_col is not None:
+            # Flush any pending code that had no data row following it
+            if pending_rec is not None:
+                records.append(pending_rec)
+                logger.info("Hakr table: code=%s qty=%s total=%s",
+                            pending_rec.product_code, pending_rec.quantity, pending_rec.total_price)
+                pending_rec = None
 
-        price_str = _kegel_num(cell(2))   # Unit price
-        total_str = _kegel_num(cell(7))   # Total (last column)
-        # Fallback: if Total not at offset 7, try offset 6
-        if total_str is None:
-            total_str = _kegel_num(cell(6))
+            m = re.match(r'^([A-Za-z]{1,8}\d{2,10})\s*:', desc)
+            if not m or not re.match(r'^[A-Za-z]{1,8}\d{2,10}$', m.group(1)):
+                continue
+            code_raw = m.group(1)
+            name = desc[m.end():].strip()[:120] or None
 
-        rec = ProductRecord(extraction_method="table")
-        rec.product_code = code_raw
-        rec.product_name = name
-        if qty:
-            rec.quantity = qty
-        if price_str:
-            rec.price = price_str + ' EUR'
-        if total_str:
-            rec.total_price = total_str + ' EUR'
+            qty_m = re.match(r'(\d+)', _cell(1))
+            qty = qty_m.group(1) if qty_m else None
+            price_str = _kegel_num(_cell(2))
+            total_str = _kegel_num(_cell(7)) or _kegel_num(_cell(6))
 
-        records.append(rec)
-        logger.info("Hakr table: code=%s qty=%s total=%s", code_raw, qty, total_str)
+            rec = ProductRecord(extraction_method="table")
+            rec.product_code = code_raw
+            rec.product_name = name
+            if qty:
+                rec.quantity = qty
+            if price_str:
+                rec.price = price_str + ' EUR'
+            if total_str:
+                rec.total_price = total_str + ' EUR'
+
+            if qty or total_str:
+                records.append(rec)
+                logger.info("Hakr table: code=%s qty=%s total=%s", code_raw, qty, total_str)
+            else:
+                # Numeric data not yet seen — may arrive in the next (continuation) row
+                pending_rec = rec
+                pending_base = desc_col
+
+        elif pending_rec is not None:
+            # Continuation row — pick up qty/price/total at the same column offsets
+            qty_m = re.match(r'(\d+)', _cell(1, pending_base))
+            qty = qty_m.group(1) if qty_m else None
+            price_str = _kegel_num(_cell(2, pending_base))
+            total_str = _kegel_num(_cell(7, pending_base)) or _kegel_num(_cell(6, pending_base))
+
+            if qty:
+                pending_rec.quantity = qty
+            if price_str:
+                pending_rec.price = price_str + ' EUR'
+            if total_str:
+                pending_rec.total_price = total_str + ' EUR'
+
+            records.append(pending_rec)
+            logger.info("Hakr table: code=%s qty=%s total=%s (from continuation row)",
+                        pending_rec.product_code, qty, total_str)
+            pending_rec = None
+
+    if pending_rec is not None:
+        records.append(pending_rec)
+        logger.info("Hakr table: code=%s qty=%s total=%s",
+                    pending_rec.product_code, pending_rec.quantity, pending_rec.total_price)
 
     return records
 
 
 def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
-    """Text fallback for Hakr invoices."""
-    records = []
+    """Text fallback for Hakr invoices.
+
+    Handles multi-line descriptions: scans for a line starting with CODE:Name,
+    then looks ahead up to 2 lines for the numeric data (qty pcs / price / total).
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    records: list[ProductRecord] = []
     seen: set[str] = set()
 
-    # Format per line: CODE:Name Npcs unit_price subtotal VAT% VAT_amount total
-    # Example: HV5902:Speed - ALU BLACK 2pcs 38.40 76.80 0% 0.00 76.80
-    row_re = re.compile(
-        r'^([A-Za-z]{1,8}\d{3,10}):(.+?)\s+'
-        r'(\d+)pcs\s+'
-        r'([\d.,]+)\s+'
-        r'([\d.,]+)\s+'
-        r'\d+%\s+'
-        r'[\d.,]+\s+'
-        r'([\d.,]+)',
+    # Code line: CODE:name  or  CODE :name  (space before colon allowed)
+    code_re = re.compile(r'^([A-Za-z]{1,8}\d{2,10})\s*:(.*)$', re.IGNORECASE)
+    # Data: N pcs  unit_price  price  VAT%  VAT  total
+    data_re = re.compile(
+        r'(\d+)\s+pcs\s+([\d.,]+)\s+([\d.,]+)\s+\d+%\s+[\d.,]+\s+([\d.,]+)',
         re.IGNORECASE
     )
 
-    def _to_float(s: str):
+    def _to_float(s: str) -> Optional[float]:
         try:
-            return float(s.replace(',', ''))
-        except ValueError:
+            return float(s.replace(',', '.'))
+        except (ValueError, AttributeError):
             return None
 
-    for line in text.splitlines():
-        m = row_re.match(line)
-        if not m:
+    i = 0
+    while i < len(lines):
+        cm = code_re.match(lines[i].strip())
+        if not cm:
+            i += 1
             continue
-        code = m.group(1).upper()
-        if code in seen:
-            continue
-        seen.add(code)
 
-        name = m.group(2).strip()[:120]
-        qty = m.group(3)
-        unit_price = _to_float(m.group(4))
-        total = _to_float(m.group(6))
+        code = cm.group(1).upper()
+        name = cm.group(2).strip()
 
-        rec = ProductRecord(extraction_method="table")
-        rec.product_code = code
-        rec.product_name = name or None
-        if qty:
-            rec.quantity = qty
-        if unit_price is not None:
-            rec.price = f"{unit_price:.2f} EUR"
-        if total is not None:
-            rec.total_price = f"{total:.2f} EUR"
+        # Try to find numeric data on the same line first, then the next 1-2 lines
+        data_m = data_re.search(lines[i])
+        j = i + 1
+        while data_m is None and j < min(i + 3, len(lines)):
+            cont = lines[j].strip()
+            if code_re.match(cont):
+                break  # Next product — stop looking
+            data_m = data_re.search(cont)
+            if not data_m:
+                name = (name + ' ' + cont).strip()  # Continuation of description
+            j += 1
 
-        records.append(rec)
-        logger.info("Hakr text: code=%s qty=%s price=%s total=%s", code, qty, unit_price, total)
+        if code not in seen:
+            seen.add(code)
+            rec = ProductRecord(extraction_method="table")
+            rec.product_code = code
+            rec.product_name = name[:120] or None
+            if data_m:
+                rec.quantity = data_m.group(1)
+                up = _to_float(data_m.group(2))
+                tot = _to_float(data_m.group(4))
+                if up is not None:
+                    rec.price = f"{up:.2f} EUR"
+                if tot is not None:
+                    rec.total_price = f"{tot:.2f} EUR"
+            records.append(rec)
+            logger.info("Hakr text: code=%s qty=%s price=%s total=%s",
+                        code, rec.quantity, rec.price, rec.total_price)
+        i += 1
 
     return records
 
@@ -5269,17 +5321,26 @@ def extract_hakr_products(tables: list, text: str = "") -> list[ProductRecord]:
         raw.extend(_parse_hakr_table(table))
 
     seen: dict[str, list[int]] = {}
-    records = []
+    records: list[ProductRecord] = []
     for rec in raw:
         _smart_merge_or_add(records, seen, rec)
 
-    if records:
+    # Only trust table results when at least some records have qty AND total
+    if records and any(r.quantity and r.total_price for r in records):
         logger.info("Hakr: %d records from tables", len(records))
         return records
 
+    if records:
+        logger.info("Hakr: %d incomplete table records — falling back to text", len(records))
+
     if text:
-        records = _parse_hakr_from_text(text)
-        logger.info("Hakr text extraction: %d records", len(records))
+        text_records = _parse_hakr_from_text(text)
+        if text_records:
+            logger.info("Hakr text extraction: %d records", len(text_records))
+            return text_records
+
+    if records:
+        logger.info("Hakr: returning %d incomplete table records (no text match)", len(records))
     return records
 
 
