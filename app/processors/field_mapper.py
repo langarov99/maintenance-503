@@ -5257,11 +5257,14 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
     records: list[ProductRecord] = []
     seen: set[str] = set()
 
-    # Code line: CODE:name  or  CODE :name  (space before colon allowed)
-    code_re = re.compile(r'^([A-Za-z]{1,8}\d{2,10})\s*:(.*)$', re.IGNORECASE)
-    # Data: N pcs  unit_price  price  VAT%  VAT  total
+    # Code line: CODE:name  or  CODE :name  or  CODE - E:name  (variant suffix allowed)
+    code_re = re.compile(
+        r'^([A-Za-z]{1,8}\d{2,10}(?:\s*-\s*[A-Za-z0-9]+)?)\s*:(.*)$',
+        re.IGNORECASE
+    )
+    # Data: N pcs (no space between N and pcs)  unit_price  price  VAT%  VAT  total
     data_re = re.compile(
-        r'(\d+)\s+pcs\s+([\d.,]+)\s+([\d.,]+)\s+\d+%\s+[\d.,]+\s+([\d.,]+)',
+        r'(\d+)\s*pcs\s+([\d.,]+)\s+([\d.,]+)\s+\d+%\s+[\d.,]+\s+([\d.,]+)',
         re.IGNORECASE
     )
 
@@ -5271,12 +5274,7 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
         except (ValueError, AttributeError):
             return None
 
-    # Diagnostic: log the first 30 lines so we can see the actual text layout
-    logger.info("Hakr text dump (first 30 lines):\n%s",
-                '\n'.join(f"  [{k:03d}] {repr(ln)}" for k, ln in enumerate(lines[:30])))
-
     i = 0
-    _diag_done = False
     while i < len(lines):
         cm = code_re.match(lines[i].strip())
         if not cm:
@@ -5285,14 +5283,6 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
 
         code = cm.group(1).upper()
         name = cm.group(2).strip()
-
-        # Diagnostic: log context around first code match
-        if not _diag_done:
-            _diag_done = True
-            logger.info("Hakr text first code=%s at line %d; context:\n%s",
-                        code, i,
-                        '\n'.join(f"  [{k:03d}] {repr(lines[k])}"
-                                  for k in range(i, min(i + 6, len(lines)))))
 
         # Try to find numeric data on the same line first, then the next 1-2 lines
         data_m = data_re.search(lines[i])
