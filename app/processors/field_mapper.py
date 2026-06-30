@@ -5291,6 +5291,7 @@ def _parse_hakr_from_text(text: str) -> list[ProductRecord]:
         code = {
             'MKAYAK L': 'HVMKAYAK E',
             'MKAYAK M': 'MKAYAK',
+            'ADAPTÉR': '7-13',
         }.get(code, code)
         name = m.group(2).strip()[:120] or None
         qty = m.group(3)
