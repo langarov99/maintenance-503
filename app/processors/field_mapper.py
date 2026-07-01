@@ -1451,10 +1451,10 @@ def _is_maxton_document(text: str) -> bool:
     return bool(re.search(r'maxton', text, re.IGNORECASE))
 
 
-_MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-]+)\s+(.*)', re.DOTALL)
+_MAXTON_CODE_RE = re.compile(r'^([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-\_]+)\s+(.*)', re.DOTALL)
 # No-anchor variant for text scanning; includes '+' for compound codes like FD1G+FD1RG
-# Prefix allows 2+ uppercase/digit chars before the first dash (e.g. KICE3FPROGTCNC-FD1B+FSF1G)
-_MAXTON_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-\+]{3,})')
+# and '_' for suffix variants like RS1GO_O / RS1GO__O (PDF uses underscores, catalog uses hyphens)
+_MAXTON_CODE_TEXT_RE = re.compile(r'(?<!\w)([A-Z]{2}[A-Z0-9]*-[A-Z0-9][A-Z0-9\-\+\_]{3,})')
 
 
 def _strip_diacritics(s: str) -> str:
@@ -1567,8 +1567,8 @@ def _parse_maxton_table(table: list[list]) -> list[ProductRecord]:
         if code.lower() in ("lp.", "lp", "nazwa", "no.", "no"):
             continue
 
-        # Normalize: ERP/catalog uses hyphens; proforma may use underscores
-        code = code.replace('_', '-')
+        # Normalize: ERP/catalog uses hyphens; proforma may use underscores (incl. double __)
+        code = re.sub(r'_+', '-', code)
 
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
@@ -1688,7 +1688,7 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             i += 1
             continue
 
-        code = m.group(1).replace('_', '-')
+        code = re.sub(r'_+', '-', m.group(1))
         # Real Maxton codes always contain at least one digit (e.g. ME-S-222-CAP2G).
         # Brand names like "MERCEDES-BENZ" match the pattern but have no digits — skip them.
         if not re.search(r'\d', code):
