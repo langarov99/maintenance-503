@@ -1689,6 +1689,11 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             continue
 
         code = m.group(1).replace('_', '-')
+        # Real Maxton codes always contain at least one digit (e.g. ME-S-222-CAP2G).
+        # Brand names like "MERCEDES-BENZ" match the pattern but have no digits — skip them.
+        if not re.search(r'\d', code):
+            i += 1
+            continue
 
         # Description: text after the code; strip leading ';' (new invoice format
         # puts code and name in the same cell separated by ';').
@@ -1748,13 +1753,21 @@ def _parse_maxton_from_text(text: str) -> list[ProductRecord]:
             # Prices appear AFTER the unit — PKWiU customs code (e.g. 29.32) is before
             after_unit = search_text[qty_m.end():]
             prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit)
+            # Anchor total on first price after the VAT% marker (e.g. "0%") so that
+            # stray trailing numbers (discounts, dates) don't replace the real total.
+            vat_m = re.search(r'\b\d+\s*%', after_unit)
+            after_vat_prices = (
+                re.findall(r'\b(\d{1,6}[.,]\d{2})\b', after_unit[vat_m.end():])
+                if vat_m else []
+            )
         else:
             quantity = None
             prices = re.findall(r'\b(\d{1,6}[.,]\d{2})\b', search_text)
+            after_vat_prices = []
 
         if len(prices) >= 2:
             price       = prices[0].replace(',', '.') + ' EUR'
-            total_price = prices[-1].replace(',', '.') + ' EUR'
+            total_price = (after_vat_prices[0] if after_vat_prices else prices[-1]).replace(',', '.') + ' EUR'
         elif len(prices) == 1:
             price       = prices[0].replace(',', '.') + ' EUR'
             total_price = None
