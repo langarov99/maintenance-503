@@ -867,13 +867,12 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         rec2._osram_article = pc   # type: ignore[attr-defined]
         rec2._osram_pos = pos_num  # type: ignore[attr-defined]
 
-        # Scan next ~6 lines for EAN (sits on the article sub-line below the
-        # position line).  Required for products like 66140CBN whose only
-        # DB key is an EAN — the position line itself has no AM/AA code.
-        # Stop immediately at a new position line or a line with an AM code
-        # (which belongs to the NEXT Phase-1 product, not this one).
+        # Scan up to 30 lines for EAN and blister info. The wider window handles
+        # cross-page products where the sub-line data appears after a page header
+        # (~15-20 lines). Stop conditions prevent picking up the next product's data.
         ean_m2 = None
-        for _scan_ln in lines[pos_line_idx + 1 : pos_line_idx + 7]:
+        bli_qty_int: Optional[int] = None
+        for _scan_ln in lines[pos_line_idx + 1 : pos_line_idx + 30]:
             _sl = _scan_ln.strip()
             if not _sl:
                 continue
@@ -881,31 +880,22 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 break
             if OSRAM_ARTICLE_RE.search(_sl):  # AM code → next Phase-1 product
                 break
-            _ean_hit = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', _sl)
-            if _ean_hit:
-                ean_m2 = _ean_hit
-                break
+            if ean_m2 is None:
+                _ean_hit = re.search(r'(?<!\d)(\d{13}|\d{14})(?!\d)', _sl)
+                if _ean_hit:
+                    ean_m2 = _ean_hit
+            if bli_qty_int is None:
+                _bli_m2 = re.search(r'\((\d+)\s+Blister\)', _sl, re.IGNORECASE)
+                if _bli_m2:
+                    bli_qty_int = int(_bli_m2.group(1))
+                    rec2.quantity = str(bli_qty_int) + " BLI"
+                    logger.info("OSRAM pos-only %s: blister packaging — quantity overridden to %d BLI",
+                                pos_num, bli_qty_int)
+            if ean_m2 is not None and bli_qty_int is not None:
+                break  # found both — no need to scan further
         if ean_m2:
             rec2.ean = ean_m2.group(1)
             logger.info("OSRAM pos-only %s: found EAN %s in sub-lines", pos_num, ean_m2.group(1))
-
-        # Check sub-lines for blister packaging "(N Blister)" and override quantity
-        bli_qty_int: Optional[int] = None
-        for _scan_ln in lines[pos_line_idx + 1 : pos_line_idx + 7]:
-            _sl = _scan_ln.strip()
-            if not _sl:
-                continue
-            if _POS_RE.match(_sl):
-                break
-            if OSRAM_ARTICLE_RE.search(_sl):
-                break
-            _bli_m2 = re.search(r'\((\d+)\s+Blister\)', _sl, re.IGNORECASE)
-            if _bli_m2:
-                bli_qty_int = int(_bli_m2.group(1))
-                rec2.quantity = str(bli_qty_int) + " BLI"
-                logger.info("OSRAM pos-only %s: blister packaging — quantity overridden to %d BLI",
-                            pos_num, bli_qty_int)
-                break
 
         qty_int = bli_qty_int if bli_qty_int else int(qty)
         if total_price and qty_int > 0:
