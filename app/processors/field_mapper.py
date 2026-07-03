@@ -704,8 +704,8 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
 
         # ── Blister packaging override: when the block contains "(N Blister)",
         # the sellable unit is the blister, not the individual piece.
-        # The unit price is recalculated automatically by the consistency check
-        # in main.py (price = total / qty_blister).
+        # Setting qty=N here causes price_secondary (total/qty) below to yield the
+        # correct BLI unit price; price_primary (/1 PCE) will mismatch and be discarded.
         _bli_m = re.search(r'\((\d+)\s+Blister\)', after_ctx, re.IGNORECASE)
         if _bli_m:
             rec.quantity = _bli_m.group(1) + " BLI"
