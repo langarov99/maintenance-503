@@ -702,16 +702,6 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.info("OSRAM %s: cross-page fallback quantity=%s",
                         osram_article, last_pos["quantity"])
 
-        # ── Blister packaging override: when the block contains "(N Blister)",
-        # the sellable unit is the blister, not the individual piece.
-        # Setting qty=N here causes price_secondary (total/qty) below to yield the
-        # correct BLI unit price; price_primary (/1 PCE) will mismatch and be discarded.
-        _bli_m = re.search(r'\((\d+)\s+Blister\)', after_ctx, re.IGNORECASE)
-        if _bli_m:
-            rec.quantity = _bli_m.group(1) + " BLI"
-            logger.info("OSRAM %s: blister packaging — quantity overridden to %s",
-                        osram_article, rec.quantity)
-
         # ── Record position number (from pre-scan map; fallback to last_pos)
         rec._osram_pos = _direct_pos_num or last_pos.get("pos_num")  # type: ignore[attr-defined]
 
@@ -745,6 +735,18 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
                 price_win_end = _j
                 break
         price_ctx = "\n".join(after_lines[:price_win_end])
+
+        # ── Blister packaging override: when the block contains "(N Blister)",
+        # the sellable unit is the blister, not the individual piece.
+        # Uses price_ctx (bounded to this product's window) to avoid picking up
+        # "(N Blister)" from the next product's lines.
+        # Setting qty=N here causes price_secondary (total/qty) below to yield the
+        # correct BLI unit price; price_primary (/1 PCE) will mismatch and be discarded.
+        _bli_m = re.search(r'\((\d+)\s+Blister\)', price_ctx, re.IGNORECASE)
+        if _bli_m:
+            rec.quantity = _bli_m.group(1) + " BLI"
+            logger.info("OSRAM %s: blister packaging — quantity overridden to %s",
+                        osram_article, rec.quantity)
         price_primary: Optional[float] = None
         up_matches = _UNIT_PRICE_RE.findall(price_ctx)
         if up_matches:
