@@ -887,10 +887,29 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             rec2.ean = ean_m2.group(1)
             logger.info("OSRAM pos-only %s: found EAN %s in sub-lines", pos_num, ean_m2.group(1))
 
-        if total_price and int(qty) > 0:
+        # Check sub-lines for blister packaging "(N Blister)" and override quantity
+        bli_qty_int: Optional[int] = None
+        for _scan_ln in lines[pos_line_idx + 1 : pos_line_idx + 7]:
+            _sl = _scan_ln.strip()
+            if not _sl:
+                continue
+            if _POS_RE.match(_sl):
+                break
+            if OSRAM_ARTICLE_RE.search(_sl):
+                break
+            _bli_m2 = re.search(r'\((\d+)\s+Blister\)', _sl, re.IGNORECASE)
+            if _bli_m2:
+                bli_qty_int = int(_bli_m2.group(1))
+                rec2.quantity = str(bli_qty_int) + " BLI"
+                logger.info("OSRAM pos-only %s: blister packaging — quantity overridden to %d BLI",
+                            pos_num, bli_qty_int)
+                break
+
+        qty_int = bli_qty_int if bli_qty_int else int(qty)
+        if total_price and qty_int > 0:
             try:
                 t2 = float(re.search(r'[\d.]+', total_price).group())
-                rec2.price = f"{round(t2 / int(qty), 2):.2f} EUR"
+                rec2.price = f"{round(t2 / qty_int, 2):.2f} EUR"
             except (ValueError, AttributeError, ZeroDivisionError):
                 pass
         records.append(rec2)
