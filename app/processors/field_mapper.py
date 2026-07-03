@@ -363,6 +363,10 @@ _QTY_RE = re.compile(r'\b(\d+)\s*(?:Брой|бр\.?|PCE|STK)\b', re.IGNORECASE)
 # Unit price: "10,77/ 1 PCE"
 _UNIT_PRICE_RE = re.compile(r'([\d,.]+)\s*/\s*1\s*PCE', re.IGNORECASE)
 
+# Code suffixes indicating 2-per-blister packaging (e.g. 2721-2BL, 62150CBB-2HB).
+# When no explicit "(N Blister)" text is found, divide piece qty by 2 to get BLI count.
+_BLISTER2_SUFFIX_RE = re.compile(r'-(?:02BL|2BL|2HB)$', re.IGNORECASE)
+
 # Tokens that mark the start of technical specs on a position line
 _OSRAM_SPEC_RE = re.compile(
     r'^\d+[.,]\d*[WwVvKk]'   # 1,8W  36V  2700K
@@ -747,6 +751,14 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             rec.quantity = _bli_m.group(1) + " BLI"
             logger.info("OSRAM %s: blister packaging — quantity overridden to %s",
                         osram_article, rec.quantity)
+        elif rec.product_code and _BLISTER2_SUFFIX_RE.search(rec.product_code):
+            _qty_m2 = re.match(r'(\d+)', str(rec.quantity or ''))
+            if _qty_m2:
+                _bli_n = int(_qty_m2.group(1)) // 2
+                if _bli_n > 0:
+                    rec.quantity = str(_bli_n) + " BLI"
+                    logger.info("OSRAM %s: suffix-based blister → quantity halved to %d BLI",
+                                osram_article, _bli_n)
         price_primary: Optional[float] = None
         up_matches = _UNIT_PRICE_RE.findall(price_ctx)
         if up_matches:
@@ -896,6 +908,14 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
         if ean_m2:
             rec2.ean = ean_m2.group(1)
             logger.info("OSRAM pos-only %s: found EAN %s in sub-lines", pos_num, ean_m2.group(1))
+
+        if bli_qty_int is None and pc and _BLISTER2_SUFFIX_RE.search(pc):
+            _bli_n2 = int(qty) // 2
+            if _bli_n2 > 0:
+                bli_qty_int = _bli_n2
+                rec2.quantity = str(_bli_n2) + " BLI"
+                logger.info("OSRAM pos-only %s: suffix-based blister → quantity halved to %d BLI",
+                            pos_num, _bli_n2)
 
         qty_int = bli_qty_int if bli_qty_int else int(qty)
         if total_price and qty_int > 0:
