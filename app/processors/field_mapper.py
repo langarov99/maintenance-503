@@ -702,6 +702,16 @@ def _parse_osram_by_article(lines: list[str]) -> list[ProductRecord]:
             logger.info("OSRAM %s: cross-page fallback quantity=%s",
                         osram_article, last_pos["quantity"])
 
+        # ── Blister packaging override: when the block contains "(N Blister)",
+        # the sellable unit is the blister, not the individual piece.
+        # The unit price is recalculated automatically by the consistency check
+        # in main.py (price = total / qty_blister).
+        _bli_m = re.search(r'\((\d+)\s+Blister\)', after_ctx, re.IGNORECASE)
+        if _bli_m:
+            rec.quantity = _bli_m.group(1) + " BLI"
+            logger.info("OSRAM %s: blister packaging — quantity overridden to %s",
+                        osram_article, rec.quantity)
+
         # ── Record position number (from pre-scan map; fallback to last_pos)
         rec._osram_pos = _direct_pos_num or last_pos.get("pos_num")  # type: ignore[attr-defined]
 
