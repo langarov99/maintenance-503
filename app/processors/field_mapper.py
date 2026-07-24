@@ -5627,10 +5627,12 @@ def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
                 if _pv > _tv and 0 < _pv <= 9999 and _pv == int(_pv):
                     _swap_qty = int(_pv)
                     qty = str(_swap_qty)
-                    price_str = f"{_tv / _swap_qty:.4f}".replace('.', ',')
+                    # total_str is actually the unit price; compute the real total
+                    price_str = total_str
+                    total_str = f"{_swap_qty * _tv:.2f}".replace('.', ',')
                     _qty_recovered = True
-                    logger.info("Kegel: price>total swap → qty=%s real_price=%s for code=%s",
-                                qty, price_str, code)
+                    logger.info("Kegel: price>total swap → qty=%s price=%s total=%s for code=%s",
+                                qty, price_str, total_str, code)
             except (ValueError, ZeroDivisionError):
                 pass
 
