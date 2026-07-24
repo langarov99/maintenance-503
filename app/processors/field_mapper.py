@@ -5613,6 +5613,31 @@ def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
                     qty = None
             except ValueError:
                 qty = None
+
+        # When price_str == total_str, the price column was misread (e.g. pdfplumber
+        # merged qty+price+total into the item cell, leaving only total visible twice).
+        # Scan the item cell lines for a data line: [customs] [unit] QTY PRICE TOTAL
+        if total_str and price_str and price_str.replace(',', '.') == total_str.replace(',', '.'):
+            _total_esc = re.escape(total_str)
+            for _ln in lines:
+                if _KEGEL_CODE_RE.search(_ln):
+                    continue
+                # Pattern: 1-4 digit integer (qty) then decimal (price) then total
+                _m = re.search(r'\b(\d{1,4})\s+([\d]+[,.][\d]+)\s+' + _total_esc + r'(?:\s|$)', _ln)
+                if _m:
+                    try:
+                        _qv2 = int(_m.group(1))
+                        _pv2 = float(_m.group(2).replace(',', '.'))
+                        _tv2 = float(total_str.replace(',', '.'))
+                        if _qv2 > 0 and abs(_qv2 * _pv2 - _tv2) <= 0.02 * _tv2 + 0.01:
+                            qty = str(_qv2)
+                            price_str = _m.group(2)
+                            logger.info("Kegel: extracted qty=%s price=%s from item cell for code=%s",
+                                        qty, price_str, code)
+                            break
+                    except (ValueError, ZeroDivisionError):
+                        pass
+
         if not qty and total_str and price_str:
             try:
                 _tv = float(total_str.replace(',', '.'))
