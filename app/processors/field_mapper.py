@@ -5603,6 +5603,28 @@ def _parse_kegel_blazusiak_table(table: list[list]) -> list[ProductRecord]:
         price_str = numerics[1] if len(numerics) >= 2 else None
         qty       = numerics[2] if len(numerics) >= 3 else None
 
+        # Sanity check: qty > 9999 is almost certainly a misread customs/tariff code
+        # (e.g. 630790980). Discard it and recover from total / price instead.
+        if qty:
+            try:
+                _qv = float(qty.replace(',', '.'))
+                if _qv > 9999 or _qv != int(_qv):
+                    logger.warning("Kegel: implausible qty=%s for code=%s — discarding", qty, code)
+                    qty = None
+            except ValueError:
+                qty = None
+        if not qty and total_str and price_str:
+            try:
+                _tv = float(total_str.replace(',', '.'))
+                _pv = float(price_str.replace(',', '.'))
+                if _pv > 0:
+                    _calc = round(_tv / _pv)
+                    if _calc > 0:
+                        qty = str(_calc)
+                        logger.info("Kegel: recovered qty=%s from total/price for code=%s", qty, code)
+            except (ValueError, ZeroDivisionError):
+                pass
+
         rec = ProductRecord(extraction_method="table")
         rec.product_code = code
         rec.product_name = (re.sub(r'\s+', ' ', name).strip() or None) if name else None
