@@ -1063,8 +1063,9 @@ def _parse_rezaw_plast_table(table: list[list]) -> list[ProductRecord]:
         # Split only on space-slash-space to avoid breaking codes like "232110/B".
         if ' / ' in article_raw:
             article_raw = article_raw.split(' / ')[0].strip()
-        # Match full article code: digits with optional /letter(s) suffix (e.g. 232110/B).
-        art_m = re.match(r'(\d{3,8}(?:/[A-Za-z0-9]+)?)', article_raw)
+        # Match full article code: digits with optional letter suffix (e.g. 200103A)
+        # and/or slash-suffix (e.g. 232110/B).
+        art_m = re.match(r'(\d{3,8}[A-Za-z]*(?:/[A-Za-z0-9]+)?)', article_raw)
         if not art_m:
             # Non-numeric code (e.g. "palet" surcharge row) — keep as-is unless
             # it looks like a repeated header cell.
