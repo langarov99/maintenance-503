@@ -6032,6 +6032,11 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
     return records
 
 
+_SENAX_CODE_REMAP = {
+    '02063000': '02063000-544',
+}
+
+
 def extract_senax_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Senax: %d table(s) received", len(tables))
     records = []
@@ -6045,15 +6050,18 @@ def extract_senax_products(tables: list, text: str = "") -> list[ProductRecord]:
 
     if records and not had_merged:
         logger.info("Senax: %d records from tables", len(records))
-        return records
-
-    if text:
+    elif text:
         text_records = _parse_senax_from_text(text)
         logger.info("Senax text extraction: %d records", len(text_records))
         if text_records:
-            return text_records
+            records = text_records
+        else:
+            logger.info("Senax: %d records from tables (text fallback empty)", len(records))
 
-    logger.info("Senax: %d records from tables (text fallback empty)", len(records))
+    for rec in records:
+        if rec.product_code in _SENAX_CODE_REMAP:
+            rec.product_code = _SENAX_CODE_REMAP[rec.product_code]
+
     return records
 
 
