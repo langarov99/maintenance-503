@@ -5861,8 +5861,8 @@ def _parse_tompar_from_text(text: str) -> list[ProductRecord]:
 # Sonax / Сенакс ООД
 # ---------------------------------------------------------------------------
 
-# 8-digit Sonax article code: e.g. 01744000
-_SENAX_CODE_RE = re.compile(r'\b(\d{8})\b')
+# 8-digit Sonax article code with optional suffix: 04172000.01 or 03234000-544
+_SENAX_CODE_RE = re.compile(r'\b(\d{8}(?:[.\-]\d+)?)\b')
 
 
 def _is_senax_document(text: str) -> bool:
@@ -5992,8 +5992,8 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         end_pos = code_positions[idx + 1][0] if idx + 1 < len(code_positions) else len(text)
         chunk = text[pos:end_pos]
 
-        # Strip the code itself and the " - " separator
-        after_code = re.sub(r'^\d{8}\s*[-–—]\s*', '', chunk).strip()
+        # Strip the code (incl. optional suffix like .01 or -544) and the " - " separator
+        after_code = re.sub(r'^\d{8}(?:[.\-]\d+)?\s*[-–—]\s*', '', chunk).strip()
 
         pm = qty_price_re.search(after_code)
         if pm:
