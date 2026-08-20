@@ -6001,11 +6001,13 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         if pm:
             name_raw = after_code[:pm.start()].strip()
             qty = pm.group(1)
-            # Extract numbers from the tail, handling space-as-thousands-separator:
-            # "1 010,88" must be treated as one number (1010.88), not split into two.
-            # Pattern: 1-3 digits, optionally followed by groups of (space + 3 digits),
-            # optionally followed by decimal part.
-            _num_re = re.compile(r'\d{1,3}(?:\s\d{3})*(?:[,\.]\d+)?')
+            # Extract numbers from the tail.
+            # Two number formats must be handled:
+            #   space-thousands:  "1 010,88"  → one token (matched by first alt)
+            #   plain 4+ digits:  "1010.69"   → one token (matched by second alt)
+            # First alt requires at least one \s\d{3} group so plain "1" doesn't
+            # greedily eat the space before a subsequent 3-digit group.
+            _num_re = re.compile(r'\d{1,3}(?:\s\d{3})+(?:[,\.]\d+)?|\d+(?:[,\.]\d+)?')
             nums = [_senax_num(t) for t in _num_re.findall(pm.group(2))]
             nums = [n for n in nums if n]
             # The Sonax invoice always ends with (final_price, total) — last two items.
