@@ -5903,10 +5903,11 @@ def _parse_senax_table(table: list[list]) -> list[ProductRecord]:
         if not desc_text:
             continue
 
-        # If the cell contains more than one code, pdfplumber merged multiple rows — skip
+        # If the cell contains more than one code, pdfplumber merged multiple rows — skip.
+        # Return None (not []) so the caller knows to prefer text fallback.
         if len(_SENAX_CODE_RE.findall(desc_text)) > 1:
             logger.info("Senax: merged table cell detected — will use text fallback")
-            return []
+            return None
 
         m = _SENAX_CODE_RE.search(desc_text)
         if not m:
@@ -6014,15 +6015,25 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
 def extract_senax_products(tables: list, text: str = "") -> list[ProductRecord]:
     logger.info("Senax: %d table(s) received", len(tables))
     records = []
+    had_merged = False
     for table in tables:
-        records.extend(_parse_senax_table(table))
-    if records:
+        result = _parse_senax_table(table)
+        if result is None:
+            had_merged = True  # merged cells detected — text fallback preferred
+        else:
+            records.extend(result)
+
+    if records and not had_merged:
         logger.info("Senax: %d records from tables", len(records))
         return records
 
     if text:
-        records = _parse_senax_from_text(text)
-        logger.info("Senax text extraction: %d records", len(records))
+        text_records = _parse_senax_from_text(text)
+        logger.info("Senax text extraction: %d records", len(text_records))
+        if text_records:
+            return text_records
+
+    logger.info("Senax: %d records from tables (text fallback empty)", len(records))
     return records
 
 
