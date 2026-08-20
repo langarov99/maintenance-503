@@ -5955,6 +5955,20 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
 
     logger.info("Senax text fallback — first 500 chars:\n%s", text[:500])
 
+    # When the document contains both a warehouse receipt (складова разписка)
+    # and an invoice (фактура), restrict parsing to the invoice section only
+    # to avoid duplicating quantities.
+    _invoice_m = re.search(
+        r'(?:данъчна\s+фактура|фактура\s*№|фактура\s*no|invoice)',
+        text, re.IGNORECASE
+    )
+    if _invoice_m:
+        text = text[_invoice_m.start():]
+        logger.info("Senax: invoice section starts at char %d — warehouse receipt skipped",
+                    _invoice_m.start())
+    else:
+        logger.info("Senax: no invoice section marker found — parsing full text")
+
     # All positions of 8-digit codes in the full text
     code_positions = [(m.start(), m.group(1)) for m in _SENAX_CODE_RE.finditer(text)]
     if not code_positions:
