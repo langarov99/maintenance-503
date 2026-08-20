@@ -5995,9 +5995,13 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         # Strip the code (incl. optional suffix like .01 or -544) and the " - " separator
         after_code = re.sub(r'^\d{8}(?:[.\-]\d+)?\s*[-–—]\s*', '', chunk).strip()
 
-        pm = qty_price_re.search(after_code)
+        # Normalize Bulgarian space-as-thousands-separator: "1 010,88" → "1010,88".
+        # Lookbehind prevents false merges like "14,58 699,89" (8 is already decimal).
+        after_code_norm = re.sub(r'(?<![,\.\d])(\d{1,3})\s+(\d{3}[,\.])', r'\1\2', after_code)
+
+        pm = qty_price_re.search(after_code_norm)
         if pm:
-            name_raw = after_code[:pm.start()].strip()
+            name_raw = after_code_norm[:pm.start()].strip()
             qty = pm.group(1)
             nums = [_senax_num(n) for n in pm.group(2).split()]
             nums = [n for n in nums if n]
