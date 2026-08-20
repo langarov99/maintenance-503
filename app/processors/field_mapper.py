@@ -5982,6 +5982,12 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
 
     for idx, (pos, code) in enumerate(code_positions):
 
+        # Stop when we see a code we've already parsed — signals the start of a
+        # duplicate section (e.g. warehouse receipt appended after the invoice).
+        if code in seen:
+            logger.info("Senax: repeated code %s at pos %d — stopping (duplicate section)", code, pos)
+            break
+
         # Chunk: from this code to the next code occurrence (or end of text)
         end_pos = code_positions[idx + 1][0] if idx + 1 < len(code_positions) else len(text)
         chunk = text[pos:end_pos]
