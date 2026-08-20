@@ -5996,6 +5996,8 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
         after_code = re.sub(r'^\d{8}(?:[.\-]\d+)?\s*[-–—]\s*', '', chunk).strip()
 
         pm = qty_price_re.search(after_code)
+        if code == '03325000':
+            logger.info("DEBUG 03325000: after_code=%r pm=%s", after_code, bool(pm))
         if pm:
             name_raw = after_code[:pm.start()].strip()
             qty = pm.group(1)
@@ -6006,6 +6008,9 @@ def _parse_senax_from_text(text: str) -> list[ProductRecord]:
             _num_re = re.compile(r'\d{1,3}(?:\s\d{3})*(?:[,\.]\d+)?')
             nums = [_senax_num(t) for t in _num_re.findall(pm.group(2))]
             nums = [n for n in nums if n]
+            if code == '03325000':
+                logger.info("DEBUG 03325000: group2=%r findall=%r nums=%r",
+                            pm.group(2), _num_re.findall(pm.group(2)), nums)
             # The Sonax invoice always ends with (final_price, total) — last two items.
             # Handles layouts: [price, total], [price, price, total],
             # [unit, disc%, price, total], etc.
